@@ -12,7 +12,11 @@
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
+// @connect      credit.linux.do
+// @connect      connect.linux.do
+// @connect      linux.do
 // @run-at       document-idle
 // @license      AGPLv3
 // ==/UserScript==
@@ -479,6 +483,8 @@
     // 界面
     class UI {
         constructor() {
+            this.userLoaded = false;
+            this.creditLoaded = false;
             this.styles();
             this.construct();
             this.events();
@@ -492,7 +498,9 @@
         styles() {
             GM_addStyle(`
                 #lda-box{position:fixed;right:16px;top:50%;transform:translateY(-50%);width:56px;height:56px;background:#fff;border-radius:28px;z-index:99999;box-shadow:0 4px 16px rgba(13,148,136,.18);border:1px solid #ccfbf1;overflow:hidden;transition:width .25s cubic-bezier(.4,0,.2,1),height .25s cubic-bezier(.4,0,.2,1),border-radius .25s cubic-bezier(.4,0,.2,1),box-shadow .25s cubic-bezier(.4,0,.2,1),border-color .25s cubic-bezier(.4,0,.2,1),padding .25s cubic-bezier(.4,0,.2,1);box-sizing:border-box;display:flex;flex-direction:column;padding:11px}
-                #lda-box.expanded{width:250px;height:auto;border-radius:16px;padding:12px}
+                #lda-box.expanded{width:265px;height:auto;border-radius:16px;padding:12px;max-height:92vh;overflow-y:auto}
+                #lda-box.expanded::-webkit-scrollbar{width:4px}
+                #lda-box.expanded::-webkit-scrollbar-thumb{background:#99f6e4;border-radius:2px}
                 #lda-box.active-run{border-color:#5eead4;box-shadow:0 0 14px rgba(20,184,166,.4)}
                 #lda-box.active-run #lda-gear svg{animation:lda-spin 4s linear infinite}
                 @keyframes lda-spin{100%{transform:rotate(360deg)}}
@@ -510,6 +518,7 @@
                 #lda-box:not(.expanded) #lda-header,
                 #lda-box:not(.expanded) #lda-execute,
                 #lda-box:not(.expanded) .lda-group,
+                #lda-box:not(.expanded) .lda-extra-group,
                 #lda-box:not(.expanded) .lda-logger{display:none !important}
                 .lda-group{display:flex;flex-direction:column;gap:6px;width:100%}
                 .lda-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#1e293b;height:26px}
@@ -523,8 +532,16 @@
                 .lda-logger::-webkit-scrollbar{width:4px}
                 .lda-logger::-webkit-scrollbar-thumb{background:#99f6e4;border-radius:2px}
                 #lda-threshold-label{cursor:pointer;user-select:none}
-                details summary::-webkit-details-marker{display:none}
+                details summary::-webkit-details-marker, details summary::marker{display:none !important}
                 details summary{list-style:none;outline:none}
+                details summary.lda-row{display:flex !important;justify-content:space-between !important;align-items:center !important;width:100% !important;height:26px !important}
+                .lda-extra-group{display:flex;flex-direction:column;gap:6px;width:100%}
+                .lda-action-btn{background:#f0fdfa;border:1px solid #99f6e4;color:#0f766e;border-radius:6px;padding:0 8px;font-size:11px;height:22px;cursor:pointer;line-height:20px;outline:none;transition:all .2s}
+                .lda-action-btn:hover{background:#ccfbf1;border-color:#5eead4}
+                .lda-grid-content{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;background:#f0fdfa;border:1px solid #ccfbf1;border-radius:8px;padding:6px 8px;margin-top:4px;box-sizing:border-box}
+                .lda-grid-item{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#334155;line-height:1.4}
+                .lda-grid-item .lda-val{font-weight:600;color:#0f766e;margin-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+                .lda-empty-tip{grid-column:span 2;text-align:center;color:#94a3b8;font-size:11px;padding:4px 0}
             `);
         }
         construct() {
@@ -560,6 +577,30 @@
                         </details>
                     </div>
                     <div class="lda-logger" id="lda-logger"></div>
+                    <div class="lda-extra-group">
+                        <details style="width:100%" id="lda-user-info-detail">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起">
+                                <span>用户信息</span>
+                                <div class="lda-ctrl">
+                                    <button class="lda-action-btn" id="lda-fetch-user">刷新</button>
+                                </div>
+                            </summary>
+                            <div class="lda-grid-content" id="lda-user-list">
+                                <div class="lda-empty-tip">正在获取</div>
+                            </div>
+                        </details>
+                        <details style="width:100%" id="lda-credit-info-detail">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起">
+                                <span>用户 LDC</span>
+                                <div class="lda-ctrl">
+                                    <button class="lda-action-btn" id="lda-fetch-credit">刷新</button>
+                                </div>
+                            </summary>
+                            <div class="lda-grid-content" id="lda-credit-list">
+                                <div class="lda-empty-tip">正在获取</div>
+                            </div>
+                        </details>
+                    </div>
                 </div>`;
             document.body.appendChild(this.box);
             document.getElementById('lda-limit').value = GM_getValue('lda_limit', 0);
@@ -601,6 +642,194 @@
                     this.log('已清除冷却');
                 }
             };
+            document.getElementById('lda-user-info-detail').addEventListener('toggle', (e) => {
+                if (e.target.open && !this.userLoaded) this.loadUserInfo();
+            });
+            document.getElementById('lda-credit-info-detail').addEventListener('toggle', (e) => {
+                if (e.target.open && !this.creditLoaded) this.loadCreditInfo();
+            });
+            document.getElementById('lda-fetch-user').onclick = (e) => {
+                e.stopPropagation();
+                const detail = document.getElementById('lda-user-info-detail');
+                if (!detail.open) detail.open = true;
+                this.loadUserInfo();
+            };
+            document.getElementById('lda-fetch-credit').onclick = (e) => {
+                e.stopPropagation();
+                const detail = document.getElementById('lda-credit-info-detail');
+                if (!detail.open) detail.open = true;
+                this.loadCreditInfo();
+            };
+        }
+        async getCurrentUsername() {
+            try {
+                const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+                if (win.Discourse?.currentUser?.username) return win.Discourse.currentUser.username;
+                const res = await fetch('/session/current.json');
+                const data = await res.json();
+                return data?.current_user?.username;
+            } catch (_) {}
+            return null;
+        }
+        async fetchConnectDetails() {
+            if (!location.hostname.includes('linux.do')) return null;
+            return new Promise((resolve) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: 'https://connect.linux.do/',
+                    timeout: 10000,
+                    onload: (res) => {
+                        if (res.status !== 200) return resolve(null);
+                        try {
+                            const doc = new DOMParser().parseFromString(res.responseText, 'text/html');
+                            const details = {};
+                            doc.querySelectorAll('.tl3-bar-item').forEach(el => {
+                                const label = el.querySelector('.tl3-bar-label')?.textContent.trim() || '';
+                                const nums = el.querySelector('.tl3-bar-nums')?.textContent.trim() || '';
+                                if (label.includes('获赞天数')) details.likedDays = nums;
+                                if (label.includes('用户') || label.includes('不同用户')) details.likedUsers = nums;
+                            });
+                            doc.querySelectorAll('.tl3-quota-card').forEach(el => {
+                                const label = el.querySelector('.tl3-quota-label')?.textContent.trim() || '';
+                                const nums = el.querySelector('.tl3-quota-nums')?.textContent.trim() || '';
+                                if (label.includes('被举报')) details.flagged = nums;
+                                else if (label.includes('举报用户')) details.flaggedUsers = nums;
+                            });
+                            doc.querySelectorAll('.tl3-veto-item').forEach(el => {
+                                const label = el.querySelector('.tl3-veto-label')?.textContent.trim() || '';
+                                const isMet = el.classList.contains('met');
+                                const vals = el.querySelectorAll('.tl3-veto-value');
+                                const val = isMet ? (vals[0]?.textContent.trim() || '0') : (vals[vals.length - 1]?.textContent.trim() || '0');
+                                if (label.includes('禁言')) details.silenced = val;
+                                if (label.includes('封禁')) details.suspended = val;
+                            });
+                            if (!details.likedDays && !details.flagged) {
+                                doc.querySelectorAll('table tbody tr').forEach(tr => {
+                                    const cells = tr.querySelectorAll('td');
+                                    if (cells.length >= 3) {
+                                        const name = cells[0].textContent.trim();
+                                        const cur = cells[1].textContent.trim();
+                                        const req = cells[2].textContent.trim();
+                                        const valStr = `${cur}/${req}`;
+                                        if (name.includes('获赞天数')) details.likedDays = valStr;
+                                        else if (name.includes('不同用户') || (name.includes('获赞') && name.includes('用户'))) details.likedUsers = valStr;
+                                        else if (name.includes('被举报')) details.flagged = valStr;
+                                        else if (name.includes('举报用户') || name.includes('发起举报')) details.flaggedUsers = valStr;
+                                        else if (name.includes('禁言')) details.silenced = cur;
+                                        else if (name.includes('封禁')) details.suspended = cur;
+                                    }
+                                });
+                            }
+                            resolve(details);
+                        } catch (_) {
+                            resolve(null);
+                        }
+                    },
+                    onerror: () => resolve(null),
+                    ontimeout: () => resolve(null)
+                });
+            });
+        }
+        async loadUserInfo() {
+            const btn = document.getElementById('lda-fetch-user');
+            const list = document.getElementById('lda-user-list');
+            btn.disabled = true;
+            try {
+                const username = await this.getCurrentUsername();
+                if (!username) throw new Error('未登录');
+                const [userRes, summaryRes, connectData] = await Promise.all([
+                    fetch(`/u/${username}.json`).then(r => r.ok ? r.json() : null).catch(() => null),
+                    fetch(`/u/${username}/summary.json`).then(r => r.ok ? r.json() : null).catch(() => null),
+                    this.fetchConnectDetails()
+                ]);
+                const userData = userRes?.user || userRes;
+                const s = summaryRes?.user_summary || {};
+                let trustLevel = userData?.trust_level ?? s?.trust_level;
+                if (trustLevel === undefined) {
+                    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+                    trustLevel = win.Discourse?.currentUser?.trust_level;
+                }
+                const levels = ['Lv0', 'Lv1', 'Lv2', 'Lv3', 'Lv4'];
+                const levelStr = trustLevel !== undefined ? (levels[trustLevel] || `Lv${trustLevel}`) : 'Lv-';
+                const timeMinutes = Math.floor((s.time_read || 0) / 60);
+                const timeDisplay = timeMinutes >= 60 ? `${(timeMinutes / 60).toFixed(1)}时` : `${timeMinutes}分`;
+                const clean = (val) => String(val || '').replace(/\s+/g, '');
+                const checkRatio = (valStr) => {
+                    if (!valStr || !valStr.includes('/')) return null;
+                    const [c, r] = valStr.split('/').map(v => parseFloat(v));
+                    return (!isNaN(c) && !isNaN(r)) ? c >= r : null;
+                };
+                const likedDays = clean(connectData?.likedDays) || '-';
+                const likedUsers = clean(connectData?.likedUsers) || '-';
+                const flaggedVal = clean(connectData?.flagged) || '0/5';
+                const flaggedUsersVal = clean(connectData?.flaggedUsers) || '0/5';
+                const silencedVal = clean(connectData?.silenced) || '0';
+                const suspendedVal = clean(connectData?.suspended) || '0';
+                const likedDaysColor = checkRatio(likedDays) === false ? 'color:#f59e0b' : '';
+                const likedUsersColor = checkRatio(likedUsers) === false ? 'color:#f59e0b' : '';
+                const flaggedColor = (parseInt(flaggedVal) > 0) ? 'color:#ef4444' : '';
+                const flaggedUsersColor = (parseInt(flaggedUsersVal) > 0) ? 'color:#ef4444' : '';
+                const silencedColor = (parseInt(silencedVal) > 0) ? 'color:#ef4444' : '';
+                const suspendedColor = (parseInt(suspendedVal) > 0) ? 'color:#ef4444' : '';
+                list.innerHTML = `
+                    <div class="lda-grid-item"><span>等级</span><span class="lda-val">${levelStr}</span></div>
+                    <div class="lda-grid-item"><span>时长</span><span class="lda-val">${timeDisplay}</span></div>
+                    <div class="lda-grid-item"><span>访问天数</span><span class="lda-val">${s.days_visited || 0}</span></div>
+                    <div class="lda-grid-item"><span>浏览帖子</span><span class="lda-val">${s.posts_read_count || 0}</span></div>
+                    <div class="lda-grid-item"><span>浏览话题</span><span class="lda-val">${s.topics_entered || 0}</span></div>
+                    <div class="lda-grid-item"><span>点赞</span><span class="lda-val">${s.likes_given || 0}</span></div>
+                    <div class="lda-grid-item"><span>获赞</span><span class="lda-val">${s.likes_received || 0}</span></div>
+                    <div class="lda-grid-item"><span>回复话题</span><span class="lda-val">${s.post_count || userData?.post_count || 0}</span></div>
+                    <div class="lda-grid-item"><span>获赞天数</span><span class="lda-val" style="${likedDaysColor}">${likedDays}</span></div>
+                    <div class="lda-grid-item"><span>获赞用户</span><span class="lda-val" style="${likedUsersColor}">${likedUsers}</span></div>
+                    <div class="lda-grid-item"><span>被举报帖子</span><span class="lda-val" style="${flaggedColor}">${flaggedVal}</span></div>
+                    <div class="lda-grid-item"><span>举报用户</span><span class="lda-val" style="${flaggedUsersColor}">${flaggedUsersVal}</span></div>
+                    <div class="lda-grid-item"><span>被禁言</span><span class="lda-val" style="${silencedColor}">${silencedVal}</span></div>
+                    <div class="lda-grid-item"><span>被封禁</span><span class="lda-val" style="${suspendedColor}">${suspendedVal}</span></div>
+                `;
+                btn.innerText = '刷新';
+                this.userLoaded = true;
+            } catch (err) {
+                list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">获取失败: ${err.message || '网络错误'}</div>`;
+                btn.innerText = '重试';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        loadCreditInfo() {
+            const btn = document.getElementById('lda-fetch-credit');
+            const list = document.getElementById('lda-credit-list');
+            btn.disabled = true;
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: 'https://credit.linux.do/api/v1/oauth/user-info',
+                responseType: 'json',
+                onload: (res) => {
+                    btn.disabled = false;
+                    if (res.status === 200 && res.response?.data) {
+                        const d = res.response.data;
+                        list.innerHTML = `
+                            <div class="lda-grid-item"><span>可用积分</span><span class="lda-val" style="color:#0d9488">${d.available_balance || 0}</span></div>
+                            <div class="lda-grid-item"><span>社区积分</span><span class="lda-val">${d.community_balance || 0}</span></div>
+                            <div class="lda-grid-item"><span>累计收入</span><span class="lda-val">+${d.total_receive || 0}</span></div>
+                            <div class="lda-grid-item"><span>累计支出</span><span class="lda-val">-${d.total_payment || 0}</span></div>
+                        `;
+                        btn.innerText = '刷新';
+                        this.creditLoaded = true;
+                    } else if (res.status === 401 || res.status === 403) {
+                        list.innerHTML = `<div class="lda-empty-tip"><a href="https://credit.linux.do" target="_blank" style="color:#0d9488">前往 credit.linux.do 登录</a></div>`;
+                        btn.innerText = '未登录';
+                    } else {
+                        list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">获取失败(${res.status})</div>`;
+                        btn.innerText = '重试';
+                    }
+                },
+                onerror: () => {
+                    btn.disabled = false;
+                    list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">请求错误</div>`;
+                    btn.innerText = '重试';
+                }
+            });
         }
         status(state) {
             const active = state === '运行';
