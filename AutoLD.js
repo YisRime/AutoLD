@@ -18,7 +18,45 @@
 // ==/UserScript==
 (function () {
     'use strict';
-
+    // 工具函数
+    const Tool = {
+        wait: async (ms, r) => {
+            const steps = Math.ceil(ms / 50);
+            for (let i = 0; i < steps; i++) {
+                if (r && !r.active) return false;
+                await new Promise(res => setTimeout(res, 50));
+            }
+            return true;
+        },
+        rand: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
+        bottom: () => Math.ceil(window.scrollY + window.innerHeight) >= document.body.scrollHeight - 200,
+        ready: () => !document.querySelector('.loading, .infinite-scroll'),
+        topic: () => location.pathname.includes('/t/topic/'),
+        identity: () => location.pathname.match(/\/t\/topic\/(\d+)/)?.[1],
+        title: () => document.querySelector('#topic-title h1 a')?.innerText,
+        isBlueDot(style, rect) {
+            if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+            const [w, h, rad] = [parseFloat(style.width) || rect?.width || 0, parseFloat(style.height) || rect?.height || 0, parseFloat(style.borderTopLeftRadius) || 0];
+            const isRound = w >= 4 && w <= 20 && h >= 4 && h <= 20 && Math.abs(w - h) <= 6 && rad >= Math.min(w, h) * 0.3;
+            if (!isRound) return false;
+            return [style.backgroundColor, style.borderColor, style.color].some(c => {
+                const m = String(c || '').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
+                return m && (m[4] === undefined ? 1 : Number(m[4])) > 0.35 && Number(m[3]) >= 120 && Number(m[2]) >= 90 && Number(m[1]) <= 80;
+            });
+        },
+        hasUnreadBlueDot() {
+            const boxes = document.querySelectorAll('.topic-timeline, .timeline-scrollarea, .timeline-container, .timeline-replies, .topic-navigation');
+            return Array.from(boxes).some(b => Array.from(b.querySelectorAll('*')).some(el => {
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return false;
+                if (this.isBlueDot(window.getComputedStyle(el), rect)) return true;
+                return ['::before', '::after'].some(p => {
+                    const ps = window.getComputedStyle(el, p);
+                    return ps && ps.content !== 'none' && this.isBlueDot(ps, rect);
+                });
+            }));
+        }
+    };
     // 防检测
     const Stealth = {
         audioCtx: null,
@@ -101,47 +139,6 @@
             ['pointerup', 'mouseup', 'click'].forEach(t => {
                 el.dispatchEvent(new MouseEvent(t, { ...baseEvt, button: 0, buttons: 0 }));
             });
-        }
-    };
-    // 初始化
-    Stealth.init();
-    // 工具函数
-    const Tool = {
-        wait: async (ms, r) => {
-            const steps = Math.ceil(ms / 50);
-            for (let i = 0; i < steps; i++) {
-                if (r && !r.active) return false;
-                await new Promise(res => setTimeout(res, 50));
-            }
-            return true;
-        },
-        rand: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
-        bottom: () => Math.ceil(window.scrollY + window.innerHeight) >= document.body.scrollHeight - 200,
-        ready: () => !document.querySelector('.loading, .infinite-scroll'),
-        topic: () => location.pathname.includes('/t/topic/'),
-        identity: () => location.pathname.match(/\/t\/topic\/(\d+)/)?.[1],
-        title: () => document.querySelector('#topic-title h1 a')?.innerText,
-        isBlueDot(style, rect) {
-            if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
-            const [w, h, rad] = [parseFloat(style.width) || rect?.width || 0, parseFloat(style.height) || rect?.height || 0, parseFloat(style.borderTopLeftRadius) || 0];
-            const isRound = w >= 4 && w <= 20 && h >= 4 && h <= 20 && Math.abs(w - h) <= 6 && rad >= Math.min(w, h) * 0.3;
-            if (!isRound) return false;
-            return [style.backgroundColor, style.borderColor, style.color].some(c => {
-                const m = String(c || '').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
-                return m && (m[4] === undefined ? 1 : Number(m[4])) > 0.35 && Number(m[3]) >= 120 && Number(m[2]) >= 90 && Number(m[1]) <= 80;
-            });
-        },
-        hasUnreadBlueDot() {
-            const boxes = document.querySelectorAll('.topic-timeline, .timeline-scrollarea, .timeline-container, .timeline-replies, .topic-navigation');
-            return Array.from(boxes).some(b => Array.from(b.querySelectorAll('*')).some(el => {
-                const rect = el.getBoundingClientRect();
-                if (rect.width <= 0 || rect.height <= 0) return false;
-                if (this.isBlueDot(window.getComputedStyle(el), rect)) return true;
-                return ['::before', '::after'].some(p => {
-                    const ps = window.getComputedStyle(el, p);
-                    return ps && ps.content !== 'none' && this.isBlueDot(ps, rect);
-                });
-            }));
         }
     };
     // 网络请求
@@ -555,6 +552,7 @@
         }
     }
     // 初始化
+    Stealth.init();
     const ui = new UI();
     Interceptor.init(ui);
     const liker = new Liker(ui);
