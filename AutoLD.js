@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.0.1
+// @version      1.1.0
 // @description  Linux Do 自动化
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
@@ -185,16 +185,55 @@
             });
         }
     };
+    // 限流保护
+    const Guard = {
+        runner: null,
+        get state() { return GM_getValue('lda_guard', { until: 0, tag: '' }); },
+        set state(v) { GM_setValue('lda_guard', v); },
+        isNormal: () => !!document.querySelector('#main-outlet, .topic-list, .topic-post, .d-header'),
+        isRestricted() { return this.state.until > Date.now(); },
+        trigger(sec, tag) {
+            if (this.isRestricted()) return;
+            const until = Date.now() + sec * 1000;
+            this.state = { until, tag };
+            const time = new Date(until).toLocaleTimeString('zh-CN', { hour12: false });
+            this.runner?.ui.log(`${tag}：暂停至 ${time}`);
+            this.runner?.pause(tag);
+        },
+        check() {
+            const { until, tag } = this.state;
+            if (until && Date.now() >= until) {
+                this.state = { until: 0, tag: '' };
+                this.runner?.ui.log(`${tag}：暂停已解除`);
+                this.runner?.resumeLimit();
+                return;
+            }
+            if (!this.isNormal() && !this.isRestricted()) {
+                const txt = (document.body?.innerText || '') + (document.title || '');
+                if (txt.length < 2500) {
+                    if (/rate limited|banned|too many requests|429/i.test(txt)) this.trigger(1800, 'IP 限流');
+                    else if (/502 bad gateway/i.test(txt)) this.trigger(300, '服务 502');
+                }
+            }
+        },
+        init(runner) {
+            this.runner = runner;
+            this.check();
+            setInterval(() => this.check(), 3000);
+        }
+    };
     // 网络请求
     const Net = {
         async fetch(url, runner, retry = 3) {
             for (let i = 0; i < retry; i++) {
+                if (Guard.isRestricted()) throw new Error();
                 try {
                     const res = await fetch(url);
-                    if (res.status === 429) throw new Error('429');
+                    if (res.status === 429) { Guard.trigger(1800, 'IP 限流'); throw new Error(); }
+                    if (res.status === 502) { Guard.trigger(300, '服务 502'); throw new Error(); }
                     if (res.ok) return await res.json();
                 } catch (e) {
-                    if (i === retry - 1) throw e;
+                    if (Guard.isRestricted() || i === retry - 1) throw e;
                     await Tool.wait(600 * Math.pow(2, i) + Tool.rand(50, 150), runner);
                 }
             }
@@ -318,11 +357,11 @@
                 if (this.url !== location.href) {
                     this.url = location.href;
                     this.timestamp = Date.now();
-                    if (this.active && !this.moving) setTimeout(() => this.resume(), 800);
+                    if (this.active && !this.moving && !Guard.isRestricted()) setTimeout(() => this.resume(), 800);
                 }
             }, 1000);
             setInterval(() => {
-                if (this.active && Date.now() - this.timestamp > 35000) {
+                if (this.active && Date.now() - this.timestamp > 35000 && !Guard.isRestricted()) {
                     this.moving = false;
                     this.timestamp = Date.now();
                     this.forward();
@@ -330,8 +369,11 @@
             }, 5000);
             if (this.active) {
                 if (this.ui.keepAlive) Stealth.keepAlive();
-                this.ui.status('运行');
-                setTimeout(() => this.resume(), 1000);
+                if (Guard.isRestricted()) this.pause(Guard.state.tag);
+                else {
+                    this.ui.status('运行');
+                    setTimeout(() => this.resume(), 1000);
+                }
             }
         }
         get active() { return sessionStorage.getItem('lda_active') === 'true'; }
@@ -342,12 +384,26 @@
         set page(v) { sessionStorage.setItem('lda_page', v); }
         get count() { return parseInt(sessionStorage.getItem('lda_count') || '0'); }
         set count(v) { sessionStorage.setItem('lda_count', v); }
+        pause(tag) {
+            this.moving = false;
+            this.ui.status(`暂停(${tag})`);
+        }
+        resumeLimit() {
+            if (!this.active) return;
+            this.ui.status('运行');
+            Guard.isNormal() ? this.resume() : location.assign('/latest');
+        }
         start() {
             if (this.ui.keepAlive) Stealth.keepAlive();
             this.active = true;
             this.count = 0;
-            this.ui.status('运行');
             this.timestamp = Date.now();
+            if (Guard.isRestricted()) {
+                this.pause(Guard.state.tag);
+                this.ui.log(`限制等待：剩余 ${Math.ceil((Guard.state.until - Date.now()) / 60000)} 分钟`);
+                return;
+            }
+            this.ui.status('运行');
             Net.fetch('/session/current.json', this).catch(()=>{});
             this.resume();
         }
@@ -358,7 +414,7 @@
             Stealth.suspendKeepAlive();
         }
         async resume() {
-            if (!this.active || Stealth.isChallenge()) return;
+            if (!this.active || Stealth.isChallenge() || Guard.isRestricted()) return;
             this.timestamp = Date.now();
             if (Tool.topic()) await this.browse();
             else await this.forward();
@@ -381,7 +437,7 @@
             await this.forward();
         }
         async browse() {
-            if (this.moving) return;
+            if (this.moving || Guard.isRestricted()) return;
             this.moving = true;
             this.ui.log(`开始阅读：${Tool.title()}`);
             const id = Tool.identity();
@@ -395,6 +451,7 @@
             if (!(await Tool.wait(Tool.rand(1200, 2000), this))) return;
             const enter = Date.now();
             while (this.active && this.moving) {
+                if (Guard.isRestricted()) { this.moving = false; return; }
                 this.timestamp = Date.now();
                 const step = this.plan();
                 const curY = window.scrollY;
@@ -447,7 +504,7 @@
             } catch (_) { return false; }
         }
         async forward() {
-            if (!this.active || Stealth.isChallenge()) return;
+            if (!this.active || Stealth.isChallenge() || Guard.isRestricted()) return;
             this.timestamp = Date.now();
             let topics = this.queue;
             if (topics.length === 0) {
@@ -815,8 +872,8 @@
         status(state) {
             const active = state === '运行';
             this.box.classList.toggle('active-run', active);
-            this.executeBtn.className = `lda-button ${active ? 'stop' : 'start'}`;
-            this.executeBtn.innerText = active ? `已读: ${sessionStorage.getItem('lda_count') || 0}` : '开始';
+            this.executeBtn.className = `lda-button ${active ? 'stop' : (state.includes('暂停') ? 'stop' : 'start')}`;
+            this.executeBtn.innerText = active ? `已读: ${sessionStorage.getItem('lda_count') || 0}` : (state.includes('暂停') ? state : '开始');
         }
         cooldown() {
             const label = document.getElementById('lda-threshold-label');
@@ -827,7 +884,9 @@
             }
         }
         updateReadCount(count) {
-            if (this.executeBtn.classList.contains('stop')) this.executeBtn.innerText = `已读: ${count}`;
+            if (this.executeBtn.classList.contains('stop') && !this.executeBtn.innerText.includes('暂停')) {
+                this.executeBtn.innerText = `已读: ${count}`;
+            }
         }
         log(msg) {
             const el = document.getElementById('lda-logger');
@@ -845,5 +904,6 @@
     Interceptor.init(ui);
     const liker = new Liker(ui);
     const runner = new Runner(liker, ui);
+    Guard.init(runner);
     ui.executeBtn.onclick = () => runner.active ? runner.stop() : runner.start();
 })();
