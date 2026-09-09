@@ -18,6 +18,53 @@
 // ==/UserScript==
 (function () {
     'use strict';
+    // 过盾管理
+    if (window.name === 'lda_challenge_window') {
+        if (!location.pathname.startsWith('/challenge')) {
+            window.close();
+            return;
+        }
+        const timer = setInterval(() => {
+            if (!location.pathname.startsWith('/challenge')) {
+                clearInterval(timer);
+                window.close();
+            }
+        }, 500);
+        const checkSuccess = () => {
+            setTimeout(() => {
+                if (!location.pathname.startsWith('/challenge')) {
+                    window.close();
+                } else {
+                    setTimeout(() => window.close(), 1000);
+                }
+            }, 1000);
+        };
+        const origFetch = window.fetch;
+        if (origFetch) {
+            window.fetch = async (...args) => {
+                const res = await origFetch.apply(window, args);
+                try {
+                    const url = String(args[0]?.url || args[0] || '');
+                    if (url.includes('/challenge') && res.ok) checkSuccess();
+                } catch (_) {}
+                return res;
+            };
+        }
+        const origOpen = window.XMLHttpRequest.prototype.open;
+        const origSend = window.XMLHttpRequest.prototype.send;
+        window.XMLHttpRequest.prototype.open = function(m, u) { this._u = u; return origOpen.apply(this, arguments); };
+        window.XMLHttpRequest.prototype.send = function(...args) {
+            this.addEventListener('load', function() {
+                try {
+                    if (String(this._u).includes('/challenge') && (this.status >= 200 && this.status < 400)) {
+                        checkSuccess();
+                    }
+                } catch (_) {}
+            });
+            return origSend.apply(this, args);
+        };
+        return;
+    }
     // 工具函数
     const Tool = {
         wait: async (ms, r) => {
@@ -60,7 +107,15 @@
     // 防检测
     const Stealth = {
         audioCtx: null,
+        isChallenge: () => location.pathname.startsWith('/challenge'),
+        openChallenge() {
+            const width = 600, height = 700;
+            const left = Math.max(0, Math.floor((window.screen.width - width) / 2));
+            const top = Math.max(0, Math.floor((window.screen.height - height) / 2));
+            return window.open('/challenge', 'lda_challenge_window', `width=${width},height=${height},top=${top},left=${left},toolbar=no,menubar=no`);
+        },
         init() {
+            if (this.isChallenge()) return;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const doc = win.document;
             try {
@@ -90,6 +145,7 @@
         },
         // 后台保活
         keepAlive() {
+            if (this.isChallenge()) return;
             try {
                 if (!this.audioCtx) {
                     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -253,7 +309,7 @@
                     history.push(floor);
                     this.records[id] = history;
                     GM_setValue('lda_records', this.records);
-                    this.ui.log(`点赞：第 ${floor} 楼`);
+                    this.ui.log(`自动点赞：第 ${floor} 楼`);
                 } catch (_) {}
                 if (!(await Tool.wait(Tool.rand(600, 900), runner))) return;
             }
@@ -314,7 +370,7 @@
             Stealth.suspendKeepAlive();
         }
         async resume() {
-            if (!this.active) return;
+            if (!this.active || Stealth.isChallenge()) return;
             this.timestamp = Date.now();
             if (Tool.topic()) await this.browse();
             else await this.forward();
@@ -357,6 +413,14 @@
                         if (!(await Tool.wait(600, this))) return;
                         checks++;
                     }
+                    if (Tool.hasUnreadBlueDot()) {
+                        this.ui.log('开始验证：CF Challenge');
+                        const cfWin = Stealth.openChallenge();
+                        while (cfWin && !cfWin.closed && this.active) {
+                            if (!(await Tool.wait(1000, this))) return;
+                        }
+                        if (!(await Tool.wait(1000, this))) return;
+                    }
                     if (id && !this.history.includes(id)) {
                         this.history.push(id);
                         if (this.history.length > 800) this.history.shift();
@@ -369,7 +433,7 @@
                     await this.forward();
                     return;
                 }
-                if (Date.now() - enter > 180000) {
+                if (Date.now() - enter > Tool.rand(180000, 300000)) {
                     this.moving = false;
                     this.count++;
                     this.ui.updateReadCount(this.count);
@@ -396,7 +460,7 @@
             } catch (_) { return false; }
         }
         async forward() {
-            if (!this.active) return;
+            if (!this.active || Stealth.isChallenge()) return;
             this.timestamp = Date.now();
             let topics = this.queue;
             if (topics.length === 0) {
@@ -459,6 +523,8 @@
                 .lda-logger::-webkit-scrollbar{width:4px}
                 .lda-logger::-webkit-scrollbar-thumb{background:#99f6e4;border-radius:2px}
                 #lda-threshold-label{cursor:pointer;user-select:none}
+                details summary::-webkit-details-marker{display:none}
+                details summary{list-style:none;outline:none}
             `);
         }
         construct() {
@@ -481,9 +547,17 @@
                     <div class="lda-group">
                         <div class="lda-row" title="自动跳过已经阅读过的话题"><span>跳过已读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-skip"></div></div>
                         <div class="lda-row" title="完整阅读每个话题未读内容"><span>完整阅读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-full"></div></div>
-                        <div class="lda-row" title="保持后台时不被浏览器休眠"><span>后台保活</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-keepalive"></div></div>
                         <div class="lda-row" title="设置本次阅读话题数量上限"><span>阅读限额</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-limit" min="0"></div></div>
                         <div class="lda-row" title="自动点赞的赞数阈值 | 点击文字可重置冷却"><span id="lda-threshold-label">点赞阈值</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-threshold" min="-1"></div></div>
+                        <details style="width:100%">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起">
+                                <span>高级选项</span>
+                            </summary>
+                            <div style="display:flex;flex-direction:column;gap:6px;padding-top:4px">
+                                <div class="lda-row" title="保持不被浏览器休眠"><span>后台保活</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-keepalive"></div></div>
+                                <div class="lda-row" title="手动进行 CF 验证"><span>CF 验证</span><div class="lda-ctrl"><button id="lda-cf-btn" class="lda-inp" style="cursor:pointer">验证</button></div></div>
+                            </div>
+                        </details>
                     </div>
                     <div class="lda-logger" id="lda-logger"></div>
                 </div>`;
@@ -513,6 +587,10 @@
                 } else {
                     Stealth.suspendKeepAlive();
                 }
+            };
+            document.getElementById('lda-cf-btn').onclick = (e) => {
+                e.stopPropagation();
+                if (!Stealth.isChallenge()) Stealth.openChallenge();
             };
             this.executeBtn = document.getElementById('lda-execute');
             document.getElementById('lda-threshold-label').onclick = (e) => {
