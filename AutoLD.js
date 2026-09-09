@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.0.0
+// @version      1.0.1
 // @description  Linux Do 自动化
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
@@ -18,6 +18,93 @@
 // ==/UserScript==
 (function () {
     'use strict';
+
+    // 防检测
+    const Stealth = {
+        audioCtx: null,
+        init() {
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            const doc = win.document;
+            try {
+                Object.defineProperty(doc, 'hidden', { get: () => false, configurable: true });
+                Object.defineProperty(doc, 'visibilityState', { get: () => 'visible', configurable: true });
+                Object.defineProperty(doc, 'webkitVisibilityState', { get: () => 'visible', configurable: true });
+                win.hasFocus = () => true;
+                doc.hasFocus = () => true;
+            } catch (_) {}
+            const blockEvents = ['visibilitychange', 'webkitvisibilitychange', 'blur', 'focusout', 'mouseleave'];
+            blockEvents.forEach(evtName => {
+                win.addEventListener(evtName, e => e.stopImmediatePropagation(), true);
+                doc.addEventListener(evtName, e => e.stopImmediatePropagation(), true);
+            });
+            setInterval(() => {
+                try {
+                    const evt = new MouseEvent('mousemove', {
+                        bubbles: true,
+                        cancelable: true,
+                        view: win,
+                        clientX: Tool.rand(100, 300),
+                        clientY: Tool.rand(100, 300)
+                    });
+                    doc.dispatchEvent(evt);
+                } catch (_) {}
+            }, Tool.rand(8000, 15000));
+        },
+        // 后台保活
+        keepAlive() {
+            try {
+                if (!this.audioCtx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (AudioContext) {
+                        this.audioCtx = new AudioContext();
+                        const osc = this.audioCtx.createOscillator();
+                        const gain = this.audioCtx.createGain();
+                        gain.gain.value = 0.00001;
+                        osc.connect(gain);
+                        gain.connect(this.audioCtx.destination);
+                        osc.start();
+                    }
+                }
+                if (this.audioCtx && this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+            } catch (_) {}
+        },
+        // 保活心跳
+        suspendKeepAlive() {
+            try {
+                if (this.audioCtx && this.audioCtx.state === 'running') {
+                    this.audioCtx.suspend();
+                }
+            } catch (_) {}
+        },
+        // 鼠标点击
+        click(el) {
+            if (!el) return;
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            const rect = el.getBoundingClientRect();
+            const x = rect.left + rect.width * (0.2 + Math.random() * 0.6);
+            const y = rect.top + rect.height * (0.2 + Math.random() * 0.6);
+            const baseEvt = {
+                bubbles: true,
+                cancelable: true,
+                view: win,
+                clientX: x,
+                clientY: y,
+                screenX: x + (win.screenX || 0),
+                screenY: y + (win.screenY || 0)
+            };
+            ['pointerover', 'mouseover', 'pointerdown', 'mousedown'].forEach(t => {
+                el.dispatchEvent(new MouseEvent(t, { ...baseEvt, button: 0, buttons: 1 }));
+            });
+            if (typeof el.focus === 'function') el.focus();
+            ['pointerup', 'mouseup', 'click'].forEach(t => {
+                el.dispatchEvent(new MouseEvent(t, { ...baseEvt, button: 0, buttons: 0 }));
+            });
+        }
+    };
+    // 初始化
+    Stealth.init();
     // 工具函数
     const Tool = {
         wait: async (ms, r) => {
@@ -79,7 +166,7 @@
             [200, 500].forEach(delay => {
                 setTimeout(() => {
                     const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary, .dialog-body button, button.btn-primary');
-                    if (btn) btn.click();
+                    if (btn) Stealth.click(btn);
                     else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
                 }, delay);
             });
@@ -165,7 +252,7 @@
                 btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 if (!(await Tool.wait(Tool.rand(400, 600), runner))) return;
                 try {
-                    btn.click();
+                    Stealth.click(btn);
                     history.push(floor);
                     this.records[id] = history;
                     GM_setValue('lda_records', this.records);
@@ -200,7 +287,11 @@
                     this.forward();
                 }
             }, 5000);
-            if (this.active) { this.ui.status('运行'); setTimeout(() => this.resume(), 1000); }
+            if (this.active) {
+                if (this.ui.keepAlive) Stealth.keepAlive();
+                this.ui.status('运行');
+                setTimeout(() => this.resume(), 1000);
+            }
         }
         get active() { return sessionStorage.getItem('lda_active') === 'true'; }
         set active(v) { sessionStorage.setItem('lda_active', v); }
@@ -211,6 +302,7 @@
         get count() { return parseInt(sessionStorage.getItem('lda_count') || '0'); }
         set count(v) { sessionStorage.setItem('lda_count', v); }
         start() {
+            if (this.ui.keepAlive) Stealth.keepAlive();
             this.active = true;
             this.count = 0;
             this.ui.status('运行');
@@ -218,7 +310,12 @@
             Net.fetch('/session/current.json', this).catch(()=>{});
             this.resume();
         }
-        stop() { this.active = false; this.moving = false; this.ui.status('停止'); }
+        stop() {
+            this.active = false;
+            this.moving = false;
+            this.ui.status('停止');
+            Stealth.suspendKeepAlive();
+        }
         async resume() {
             if (!this.active) return;
             this.timestamp = Date.now();
@@ -247,7 +344,13 @@
             while (this.active && this.moving) {
                 this.timestamp = Date.now();
                 const step = this.plan();
+                const curY = window.scrollY;
                 window.scrollBy({ top: step.top, behavior: 'smooth' });
+                setTimeout(() => {
+                    if (window.scrollY === curY && this.active && this.moving) {
+                        window.scrollBy(0, step.top);
+                    }
+                }, 100);
                 if (!(await Tool.wait(step.delay, this))) return;
                 await this.liker.execute(this);
                 if (Tool.bottom() && Tool.ready()) {
@@ -324,6 +427,7 @@
         get threshold() { return parseInt(document.getElementById('lda-threshold').value); }
         get skip() { return document.getElementById('lda-skip').checked; }
         get full() { return document.getElementById('lda-full').checked; }
+        get keepAlive() { return document.getElementById('lda-keepalive').checked; }
         styles() {
             GM_addStyle(`
                 #lda-box{position:fixed;right:16px;top:50%;transform:translateY(-50%);width:56px;height:56px;background:#fff;border-radius:28px;z-index:99999;box-shadow:0 4px 16px rgba(13,148,136,.18);border:1px solid #ccfbf1;overflow:hidden;transition:width .25s cubic-bezier(.4,0,.2,1),height .25s cubic-bezier(.4,0,.2,1),border-radius .25s cubic-bezier(.4,0,.2,1),box-shadow .25s cubic-bezier(.4,0,.2,1),border-color .25s cubic-bezier(.4,0,.2,1),padding .25s cubic-bezier(.4,0,.2,1);box-sizing:border-box;display:flex;flex-direction:column;padding:11px}
@@ -380,6 +484,7 @@
                     <div class="lda-group">
                         <div class="lda-row" title="自动跳过已经阅读过的话题"><span>跳过已读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-skip"></div></div>
                         <div class="lda-row" title="完整阅读每个话题未读内容"><span>完整阅读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-full"></div></div>
+                        <div class="lda-row" title="保持后台时不被浏览器休眠"><span>后台保活</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-keepalive"></div></div>
                         <div class="lda-row" title="设置本次阅读话题数量上限"><span>阅读限额</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-limit" min="0"></div></div>
                         <div class="lda-row" title="自动点赞的赞数阈值 | 点击文字可重置冷却"><span id="lda-threshold-label">点赞阈值</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-threshold" min="-1"></div></div>
                     </div>
@@ -390,6 +495,7 @@
             document.getElementById('lda-threshold').value = GM_getValue('lda_threshold', 0);
             document.getElementById('lda-skip').checked = GM_getValue('lda_skip', true);
             document.getElementById('lda-full').checked = GM_getValue('lda_full', false);
+            document.getElementById('lda-keepalive').checked = GM_getValue('lda_keepalive', true);
         }
         events() {
             this.box.onclick = () => {
@@ -403,6 +509,14 @@
             document.getElementById('lda-threshold').onchange = e => GM_setValue('lda_threshold', e.target.value);
             document.getElementById('lda-skip').onchange = e => GM_setValue('lda_skip', e.target.checked);
             document.getElementById('lda-full').onchange = e => GM_setValue('lda_full', e.target.checked);
+            document.getElementById('lda-keepalive').onchange = e => {
+                GM_setValue('lda_keepalive', e.target.checked);
+                if (e.target.checked) {
+                    if (this.executeBtn && this.executeBtn.classList.contains('stop')) Stealth.keepAlive();
+                } else {
+                    Stealth.suspendKeepAlive();
+                }
+            };
             this.executeBtn = document.getElementById('lda-execute');
             document.getElementById('lda-threshold-label').onclick = (e) => {
                 e.stopPropagation();
