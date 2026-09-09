@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.1.0
+// @version      1.1.1
 // @description  Linux Do 自动化
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
@@ -190,7 +190,7 @@
         runner: null,
         get state() { return GM_getValue('lda_guard', { until: 0, tag: '' }); },
         set state(v) { GM_setValue('lda_guard', v); },
-        isNormal: () => !!document.querySelector('#main-outlet, .topic-list, .topic-post, .d-header'),
+        isNormal: () => !!document.querySelector('#main-outlet, .topic-list, .topic-post, .d-header, .ember-application, #discourse-splash') || !!document.querySelector('meta[name="generator"][content*="Discourse"]'),
         isRestricted() { return this.state.until > Date.now(); },
         trigger(sec, tag) {
             if (this.isRestricted()) return;
@@ -201,18 +201,25 @@
             this.runner?.pause(tag);
         },
         check() {
+            if (this.isNormal()) {
+                if (this.state.until) {
+                    this.state = { until: 0, tag: '' };
+                    if (this.runner?.active) this.runner.ui.status('运行');
+                }
+                return;
+            }
             const { until, tag } = this.state;
             if (until && Date.now() >= until) {
                 this.state = { until: 0, tag: '' };
-                this.runner?.ui.log(`${tag}：暂停已解除`);
+                this.runner?.ui.log(`${tag}：已解除`);
                 this.runner?.resumeLimit();
                 return;
             }
-            if (!this.isNormal() && !this.isRestricted()) {
-                const txt = (document.body?.innerText || '') + (document.title || '');
+            if (!this.isRestricted()) {
+                const txt = ((document.body?.innerText || '') + ' ' + (document.title || '')).toLowerCase();
                 if (txt.length < 2500) {
-                    if (/rate limited|banned|too many requests|429/i.test(txt)) this.trigger(1800, 'IP 限流');
-                    else if (/502 bad gateway/i.test(txt)) this.trigger(300, '服务 502');
+                    if (/rate limited|banned temporarily|too many requests|error\s*429|http\s*429/.test(txt)) this.trigger(1800, 'IP 限流');
+                    else if (/502\s*bad\s*gateway/.test(txt)) this.trigger(300, '服务 502');
                 }
             }
         },
@@ -679,11 +686,11 @@
             this.executeBtn = document.getElementById('lda-execute');
             document.getElementById('lda-threshold-label').onclick = (e) => {
                 e.stopPropagation();
-                if (GM_getValue('lda_cooldown', 0) > Date.now()) {
-                    GM_setValue('lda_cooldown', 0);
-                    this.cooldown();
-                    this.log('已清除冷却');
-                }
+                GM_setValue('lda_cooldown', 0);
+                Guard.state = { until: 0, tag: '' };
+                this.cooldown();
+                if (runner.active) this.status('运行');
+                this.log('已清除所有冷却与限制');
             };
             const bindDetailLoader = (name, loader) => {
                 const detail = document.getElementById(`lda-${name}-info-detail`);
