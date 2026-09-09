@@ -24,32 +24,22 @@
     'use strict';
     // 过盾管理
     if (window.name === 'lda_challenge_window') {
-        if (!location.pathname.startsWith('/challenge')) {
-            window.close();
-            return;
-        }
+        const checkClose = () => { if (!location.pathname.startsWith('/challenge')) window.close(); };
+        checkClose();
         const timer = setInterval(() => {
             if (!location.pathname.startsWith('/challenge')) {
                 clearInterval(timer);
                 window.close();
             }
         }, 500);
-        const checkSuccess = () => {
-            setTimeout(() => {
-                if (!location.pathname.startsWith('/challenge')) {
-                    window.close();
-                } else {
-                    setTimeout(() => window.close(), 1000);
-                }
-            }, 1000);
-        };
+        const checkSuccess = () => setTimeout(() => { checkClose(); setTimeout(window.close, 1000); }, 1000);
+        
         const origFetch = window.fetch;
         if (origFetch) {
             window.fetch = async (...args) => {
                 const res = await origFetch.apply(window, args);
                 try {
-                    const url = String(args[0]?.url || args[0] || '');
-                    if (url.includes('/challenge') && res.ok) checkSuccess();
+                    if (String(args[0]?.url || args[0] || '').includes('/challenge') && res.ok) checkSuccess();
                 } catch (_) {}
                 return res;
             };
@@ -58,11 +48,9 @@
         const origSend = window.XMLHttpRequest.prototype.send;
         window.XMLHttpRequest.prototype.open = function(m, u) { this._u = u; return origOpen.apply(this, arguments); };
         window.XMLHttpRequest.prototype.send = function(...args) {
-            this.addEventListener('load', function() {
+            this.addEventListener('load', () => {
                 try {
-                    if (String(this._u).includes('/challenge') && (this.status >= 200 && this.status < 400)) {
-                        checkSuccess();
-                    }
+                    if (String(this._u).includes('/challenge') && this.status >= 200 && this.status < 400) checkSuccess();
                 } catch (_) {}
             });
             return origSend.apply(this, args);
@@ -129,21 +117,19 @@
                 win.hasFocus = () => true;
                 doc.hasFocus = () => true;
             } catch (_) {}
-            const blockEvents = ['visibilitychange', 'webkitvisibilitychange', 'blur', 'focusout', 'mouseleave'];
-            blockEvents.forEach(evtName => {
+            ['visibilitychange', 'webkitvisibilitychange', 'blur', 'focusout', 'mouseleave'].forEach(evtName => {
                 win.addEventListener(evtName, e => e.stopImmediatePropagation(), true);
                 doc.addEventListener(evtName, e => e.stopImmediatePropagation(), true);
             });
             setInterval(() => {
                 try {
-                    const evt = new MouseEvent('mousemove', {
+                    doc.dispatchEvent(new MouseEvent('mousemove', {
                         bubbles: true,
                         cancelable: true,
                         view: win,
                         clientX: Tool.rand(100, 300),
                         clientY: Tool.rand(100, 300)
-                    });
-                    doc.dispatchEvent(evt);
+                    }));
                 } catch (_) {}
             }, Tool.rand(8000, 15000));
         },
@@ -163,7 +149,7 @@
                         osc.start();
                     }
                 }
-                if (this.audioCtx && this.audioCtx.state === 'suspended') {
+                if (this.audioCtx?.state === 'suspended') {
                     this.audioCtx.resume();
                 }
             } catch (_) {}
@@ -171,7 +157,7 @@
         // 保活心跳
         suspendKeepAlive() {
             try {
-                if (this.audioCtx && this.audioCtx.state === 'running') {
+                if (this.audioCtx?.state === 'running') {
                     this.audioCtx.suspend();
                 }
             } catch (_) {}
@@ -181,16 +167,14 @@
             if (!el) return;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const rect = el.getBoundingClientRect();
-            const x = rect.left + rect.width * (0.2 + Math.random() * 0.6);
-            const y = rect.top + rect.height * (0.2 + Math.random() * 0.6);
             const baseEvt = {
                 bubbles: true,
                 cancelable: true,
                 view: win,
-                clientX: x,
-                clientY: y,
-                screenX: x + (win.screenX || 0),
-                screenY: y + (win.screenY || 0)
+                clientX: rect.left + rect.width * (0.2 + Math.random() * 0.6),
+                clientY: rect.top + rect.height * (0.2 + Math.random() * 0.6),
+                screenX: (rect.left + rect.width * 0.5) + (win.screenX || 0),
+                screenY: (rect.top + rect.height * 0.5) + (win.screenY || 0)
             };
             ['pointerover', 'mouseover', 'pointerdown', 'mousedown'].forEach(t => {
                 el.dispatchEvent(new MouseEvent(t, { ...baseEvt, button: 0, buttons: 1 }));
@@ -384,6 +368,18 @@
             const top = Math.floor(vh * (this.ui.full ? 0.35 : 0.65)) + Tool.rand(-20, 40);
             return { top, delay: Math.floor(top * 1.5) + Tool.rand(200, 400) };
         }
+        async finishTopic(id) {
+            if (id && !this.history.includes(id)) {
+                this.history.push(id);
+                if (this.history.length > 800) this.history.shift();
+                GM_setValue('lda_history', this.history);
+            }
+            this.moving = false;
+            this.count++;
+            this.ui.updateReadCount(this.count);
+            if (this.ui.limit > 0 && this.count >= this.ui.limit) this.stop();
+            await this.forward();
+        }
         async browse() {
             if (this.moving) return;
             this.moving = true;
@@ -425,24 +421,11 @@
                         }
                         if (!(await Tool.wait(1000, this))) return;
                     }
-                    if (id && !this.history.includes(id)) {
-                        this.history.push(id);
-                        if (this.history.length > 800) this.history.shift();
-                        GM_setValue('lda_history', this.history);
-                    }
-                    this.moving = false;
-                    this.count++;
-                    this.ui.updateReadCount(this.count);
-                    if (this.ui.limit > 0 && this.count >= this.ui.limit) this.stop();
-                    await this.forward();
+                    await this.finishTopic(id);
                     return;
                 }
                 if (Date.now() - enter > Tool.rand(180000, 300000)) {
-                    this.moving = false;
-                    this.count++;
-                    this.ui.updateReadCount(this.count);
-                    if (this.ui.limit > 0 && this.count >= this.ui.limit) this.stop();
-                    await this.forward();
+                    await this.finishTopic(id);
                     return;
                 }
             }
@@ -603,11 +586,6 @@
                     </div>
                 </div>`;
             document.body.appendChild(this.box);
-            document.getElementById('lda-limit').value = GM_getValue('lda_limit', 0);
-            document.getElementById('lda-threshold').value = GM_getValue('lda_threshold', 0);
-            document.getElementById('lda-skip').checked = GM_getValue('lda_skip', true);
-            document.getElementById('lda-full').checked = GM_getValue('lda_full', false);
-            document.getElementById('lda-keepalive').checked = GM_getValue('lda_keepalive', true);
         }
         events() {
             this.box.onclick = () => {
@@ -617,14 +595,22 @@
                 e.stopPropagation();
                 this.box.classList.toggle('expanded');
             };
-            document.getElementById('lda-limit').onchange = e => GM_setValue('lda_limit', e.target.value);
-            document.getElementById('lda-threshold').onchange = e => GM_setValue('lda_threshold', e.target.value);
-            document.getElementById('lda-skip').onchange = e => GM_setValue('lda_skip', e.target.checked);
-            document.getElementById('lda-full').onchange = e => GM_setValue('lda_full', e.target.checked);
-            document.getElementById('lda-keepalive').onchange = e => {
+            [['limit', 0, false], ['threshold', 0, false], ['skip', true, true], ['full', false, true]].forEach(([k, def, isChk]) => {
+                const el = document.getElementById(`lda-${k}`);
+                if (isChk) {
+                    el.checked = GM_getValue(`lda_${k}`, def);
+                    el.onchange = e => GM_setValue(`lda_${k}`, e.target.checked);
+                } else {
+                    el.value = GM_getValue(`lda_${k}`, def);
+                    el.onchange = e => GM_setValue(`lda_${k}`, e.target.value);
+                }
+            });
+            const keepaliveEl = document.getElementById('lda-keepalive');
+            keepaliveEl.checked = GM_getValue('lda_keepalive', true);
+            keepaliveEl.onchange = e => {
                 GM_setValue('lda_keepalive', e.target.checked);
                 if (e.target.checked) {
-                    if (this.executeBtn && this.executeBtn.classList.contains('stop')) Stealth.keepAlive();
+                    if (this.executeBtn?.classList.contains('stop')) Stealth.keepAlive();
                 } else {
                     Stealth.suspendKeepAlive();
                 }
@@ -642,24 +628,19 @@
                     this.log('已清除冷却');
                 }
             };
-            document.getElementById('lda-user-info-detail').addEventListener('toggle', (e) => {
-                if (e.target.open && !this.userLoaded) this.loadUserInfo();
-            });
-            document.getElementById('lda-credit-info-detail').addEventListener('toggle', (e) => {
-                if (e.target.open && !this.creditLoaded) this.loadCreditInfo();
-            });
-            document.getElementById('lda-fetch-user').onclick = (e) => {
-                e.stopPropagation();
-                const detail = document.getElementById('lda-user-info-detail');
-                if (!detail.open) detail.open = true;
-                this.loadUserInfo();
+            const bindDetailLoader = (name, loader) => {
+                const detail = document.getElementById(`lda-${name}-info-detail`);
+                detail.addEventListener('toggle', e => {
+                    if (e.target.open && !this[`${name}Loaded`]) loader();
+                });
+                document.getElementById(`lda-fetch-${name}`).onclick = (e) => {
+                    e.stopPropagation();
+                    if (!detail.open) detail.open = true;
+                    loader();
+                };
             };
-            document.getElementById('lda-fetch-credit').onclick = (e) => {
-                e.stopPropagation();
-                const detail = document.getElementById('lda-credit-info-detail');
-                if (!detail.open) detail.open = true;
-                this.loadCreditInfo();
-            };
+            bindDetailLoader('user', () => this.loadUserInfo());
+            bindDetailLoader('credit', () => this.loadCreditInfo());
         }
         async getCurrentUsername() {
             try {
