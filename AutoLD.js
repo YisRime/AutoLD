@@ -1,7 +1,7 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.1.1
+// @version      1.2.0
 // @description  Linux Do 自动化
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
@@ -22,48 +22,14 @@
 // ==/UserScript==
 (function () {
     'use strict';
-    // 过盾管理
-    if (window.name === 'lda_challenge_window') {
-        const checkClose = () => { if (!location.pathname.startsWith('/challenge')) window.close(); };
-        checkClose();
-        const timer = setInterval(() => {
-            if (!location.pathname.startsWith('/challenge')) {
-                clearInterval(timer);
-                window.close();
-            }
-        }, 500);
-        const checkSuccess = () => setTimeout(() => { checkClose(); setTimeout(window.close, 1000); }, 1000);
-        
-        const origFetch = window.fetch;
-        if (origFetch) {
-            window.fetch = async (...args) => {
-                const res = await origFetch.apply(window, args);
-                try {
-                    if (String(args[0]?.url || args[0] || '').includes('/challenge') && res.ok) checkSuccess();
-                } catch (_) {}
-                return res;
-            };
-        }
-        const origOpen = window.XMLHttpRequest.prototype.open;
-        const origSend = window.XMLHttpRequest.prototype.send;
-        window.XMLHttpRequest.prototype.open = function(m, u) { this._u = u; return origOpen.apply(this, arguments); };
-        window.XMLHttpRequest.prototype.send = function(...args) {
-            this.addEventListener('load', () => {
-                try {
-                    if (String(this._u).includes('/challenge') && this.status >= 200 && this.status < 400) checkSuccess();
-                } catch (_) {}
-            });
-            return origSend.apply(this, args);
-        };
-        return;
-    }
-    // 工具函数
+    if (window.__ldaBooted) return;
+    window.__ldaBooted = true;
     const Tool = {
         wait: async (ms, r) => {
-            const steps = Math.ceil(ms / 50);
+            const steps = Math.ceil(ms / 500);
             for (let i = 0; i < steps; i++) {
                 if (r && !r.active) return false;
-                await new Promise(res => setTimeout(res, 50));
+                await new Promise(res => setTimeout(res, 500));
             }
             return true;
         },
@@ -73,41 +39,24 @@
         topic: () => location.pathname.includes('/t/topic/'),
         identity: () => location.pathname.match(/\/t\/topic\/(\d+)/)?.[1],
         title: () => document.querySelector('#topic-title h1 a')?.innerText,
-        isBlueDot(style, rect) {
-            if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
-            const [w, h, rad] = [parseFloat(style.width) || rect?.width || 0, parseFloat(style.height) || rect?.height || 0, parseFloat(style.borderTopLeftRadius) || 0];
-            const isRound = w >= 4 && w <= 20 && h >= 4 && h <= 20 && Math.abs(w - h) <= 6 && rad >= Math.min(w, h) * 0.3;
-            if (!isRound) return false;
-            return [style.backgroundColor, style.borderColor, style.color].some(c => {
-                const m = String(c || '').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
-                return m && (m[4] === undefined ? 1 : Number(m[4])) > 0.35 && Number(m[3]) >= 120 && Number(m[2]) >= 90 && Number(m[1]) <= 80;
+        dots: () => {
+            const vh = window.innerHeight ||  800;
+            return Array.from(document.querySelectorAll('.read-state:not(.read)')).filter(el => {
+                const r = el.getBoundingClientRect();
+                return r.top > -50 && r.top < vh + 50;
             });
         },
-        hasUnreadBlueDot() {
-            const boxes = document.querySelectorAll('.topic-timeline, .timeline-scrollarea, .timeline-container, .timeline-replies, .topic-navigation');
-            return Array.from(boxes).some(b => Array.from(b.querySelectorAll('*')).some(el => {
-                const rect = el.getBoundingClientRect();
-                if (rect.width <= 0 || rect.height <= 0) return false;
-                if (this.isBlueDot(window.getComputedStyle(el), rect)) return true;
-                return ['::before', '::after'].some(p => {
-                    const ps = window.getComputedStyle(el, p);
-                    return ps && ps.content !== 'none' && this.isBlueDot(ps, rect);
-                });
-            }));
+        nextDot: () => {
+            const vh = window.innerHeight ||  800;
+            const all = Array.from(document.querySelectorAll('.read-state:not(.read)'));
+            const pick = all.filter(el => el.getBoundingClientRect().top > vh * 0.25);
+            const arr = pick.length ? pick : all;
+            return arr.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
         }
     };
-    // 防检测
     const Stealth = {
         audioCtx: null,
-        isChallenge: () => location.pathname.startsWith('/challenge'),
-        openChallenge() {
-            const width = 600, height = 700;
-            const left = Math.max(0, Math.floor((window.screen.width - width) / 2));
-            const top = Math.max(0, Math.floor((window.screen.height - height) / 2));
-            return window.open('/challenge', 'lda_challenge_window', `width=${width},height=${height},top=${top},left=${left},toolbar=no,menubar=no`);
-        },
         init() {
-            if (this.isChallenge()) return;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const doc = win.document;
             try {
@@ -131,11 +80,9 @@
                         clientY: Tool.rand(100, 300)
                     }));
                 } catch (_) {}
-            }, Tool.rand(8000, 15000));
+            }, Tool.rand(16, 30) * 500);
         },
-        // 后台保活
         keepAlive() {
-            if (this.isChallenge()) return;
             try {
                 if (!this.audioCtx) {
                     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -154,7 +101,6 @@
                 }
             } catch (_) {}
         },
-        // 保活心跳
         suspendKeepAlive() {
             try {
                 if (this.audioCtx?.state === 'running') {
@@ -162,7 +108,6 @@
                 }
             } catch (_) {}
         },
-        // 鼠标点击
         click(el) {
             if (!el) return;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -185,85 +130,45 @@
             });
         }
     };
-    // 限流保护
-    const Guard = {
-        runner: null,
-        get state() { return GM_getValue('lda_guard', { until: 0, tag: '' }); },
-        set state(v) { GM_setValue('lda_guard', v); },
-        isNormal: () => !!document.querySelector('#main-outlet, .topic-list, .topic-post, .d-header, .ember-application, #discourse-splash') || !!document.querySelector('meta[name="generator"][content*="Discourse"]'),
-        isRestricted() { return this.state.until > Date.now(); },
-        trigger(sec, tag) {
-            if (this.isRestricted()) return;
-            const until = Date.now() + sec * 1000;
-            this.state = { until, tag };
-            const time = new Date(until).toLocaleTimeString('zh-CN', { hour12: false });
-            this.runner?.ui.log(`${tag}：暂停至 ${time}`);
-            this.runner?.pause(tag);
-        },
-        check() {
-            if (this.isNormal()) {
-                if (this.state.until) {
-                    this.state = { until: 0, tag: '' };
-                    if (this.runner?.active) this.runner.ui.status('运行');
-                }
-                return;
-            }
-            const { until, tag } = this.state;
-            if (until && Date.now() >= until) {
-                this.state = { until: 0, tag: '' };
-                this.runner?.ui.log(`${tag}：已解除`);
-                this.runner?.resumeLimit();
-                return;
-            }
-            if (!this.isRestricted()) {
-                const txt = ((document.body?.innerText || '') + ' ' + (document.title || '')).toLowerCase();
-                if (txt.length < 2500) {
-                    if (/rate limited|banned temporarily|too many requests|error\s*429|http\s*429/.test(txt)) this.trigger(1800, 'IP 限流');
-                    else if (/502\s*bad\s*gateway/.test(txt)) this.trigger(300, '服务 502');
-                }
-            }
-        },
-        init(runner) {
-            this.runner = runner;
-            this.check();
-            setInterval(() => this.check(), 3000);
-        }
-    };
-    // 网络请求
     const Net = {
-        async fetch(url, runner, retry = 3) {
-            for (let i = 0; i < retry; i++) {
-                if (Guard.isRestricted()) throw new Error();
-                try {
-                    const res = await fetch(url);
-                    if (res.status === 429) { Guard.trigger(1800, 'IP 限流'); throw new Error(); }
-                    if (res.status === 502) { Guard.trigger(300, '服务 502'); throw new Error(); }
-                    if (res.ok) return await res.json();
-                } catch (e) {
-                    if (Guard.isRestricted() || i === retry - 1) throw e;
-                    await Tool.wait(600 * Math.pow(2, i) + Tool.rand(50, 150), runner);
-                }
-            }
+        async fetch(url) {
+            try {
+                const res = await fetch(url);
+                if (res.ok) return await res.json();
+            } catch (_) {}
+            return null;
         }
     };
-    // 接口拦截
     const Interceptor = {
         ui: null,
+        runner: null,
+        pausing: 0,
         closePopup() {
-            [200, 500].forEach(delay => {
-                setTimeout(() => {
-                    const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary, .dialog-body button, button.btn-primary');
-                    if (btn) Stealth.click(btn);
-                    else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-                }, delay);
-            });
+            setTimeout(() => {
+                const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary, button.btn-primary');
+                if (btn) Stealth.click(btn);
+                else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+            }, 500);
+        },
+        pause(res) {
+            const now = Date.now();
+            if (now < this.pausing) return;
+            this.pausing = now + 5000;
+            let sec = 300;
+            const retryAfter = res?.headers?.get?.('Retry-After') || res?.getResponseHeader?.('Retry-After');
+            if (retryAfter) {
+                const n = parseInt(retryAfter, 10);
+                if (n > 0) sec = n;
+            }
+            console.log(`接口限流：暂停 ${Math.round(sec / 60)} 分钟`);
+            this.runner?.pause(sec);
         },
         trigger(data) {
             const waitSec = data?.extras?.wait_seconds || 0;
             const timeLeft = data?.extras?.time_left || waitSec;
             GM_setValue('lda_cooldown', waitSec > 0 ? Date.now() + waitSec * 1000 : Date.now() + 30 * 60 * 1000);
             if (this.ui) {
-                this.ui.log(`点赞受限：${timeLeft}`);
+                console.log(`点赞受限：剩余 ${timeLeft} 秒`);
                 this.ui.cooldown();
             }
             this.closePopup();
@@ -275,10 +180,11 @@
             const origFetch = win.fetch;
             win.fetch = async (...args) => {
                 const res = await origFetch.apply(win, args);
+                if (res.status === 429 || res.status === 403) this.pause(res);
                 if (isLike(args[0]?.url || args[0])) {
                     try {
                         const d = await res.clone().json();
-                        if (res.status === 429 || d?.error_type === 'rate_limit') Interceptor.trigger(d);
+                        if (d?.error_type === 'rate_limit') this.trigger(d);
                     } catch (_) {}
                 }
                 return res;
@@ -288,10 +194,11 @@
             win.XMLHttpRequest.prototype.open = function(m, u) { this._u = u; return origOpen.apply(this, arguments); };
             win.XMLHttpRequest.prototype.send = function(...args) {
                 this.addEventListener('load', function() {
+                    if (this.status === 429 || this.status === 403) Interceptor.pause(this);
                     if (isLike(this._u)) {
                         try {
                             const d = JSON.parse(this.responseText);
-                            if (this.status === 429 || d?.error_type === 'rate_limit') Interceptor.trigger(d);
+                            if (d?.error_type === 'rate_limit') Interceptor.trigger(d);
                         } catch (_) {}
                     }
                 });
@@ -299,11 +206,9 @@
             };
         }
     };
-    // 点赞管理
     class Liker {
         constructor(ui) {
             this.ui = ui;
-            this.records = GM_getValue('lda_records', {});
         }
         cooling() { return GM_getValue('lda_cooldown', 0) > Date.now(); }
         getScore(post) {
@@ -324,63 +229,39 @@
                 this.ui.cooldown();
                 return;
             }
-            const id = Tool.identity();
-            if (!id) return;
-            const history = this.records[id] || [];
             const threshold = this.ui.threshold;
+            const topBound = window.scrollY + window.innerHeight + 100;
             for (const post of Array.from(document.querySelectorAll('.topic-post'))) {
-                if (this.cooling() || !runner.active) break;
-                const floor = parseInt(post.getAttribute('data-post-number') || '0');
-                if (!floor || history.includes(floor)) continue;
-                if (this.isLiked(post)) { history.push(floor); continue; }
+                if (this.cooling() || !runner.active) return;
+                if (post.offsetTop > topBound) continue;
+                if (this.isLiked(post)) continue;
                 if (threshold > 0 && this.getScore(post) < threshold) continue;
                 const btn = post.querySelector('button.btn-toggle-reaction-like, .discourse-reactions-reaction-button button, button.like');
                 if (!btn) continue;
-                btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                if (!(await Tool.wait(Tool.rand(400, 600), runner))) return;
-                try {
-                    Stealth.click(btn);
-                    history.push(floor);
-                    this.records[id] = history;
-                    GM_setValue('lda_records', this.records);
-                    this.ui.log(`自动点赞：第 ${floor} 楼`);
-                } catch (_) {}
-                if (!(await Tool.wait(Tool.rand(600, 900), runner))) return;
+                Stealth.click(btn);
+                console.log(`自动点赞：第 ${post.getAttribute('data-post-number')} 楼`);
+                if (!(await Tool.wait(500, runner))) return;
             }
-            this.records[id] = history;
-            GM_setValue('lda_records', this.records);
         }
     }
-    // 浏览管理
     class Runner {
         constructor(liker, ui) {
             this.liker = liker;
             this.ui = ui;
             this.moving = false;
             this.history = GM_getValue('lda_history', []);
-            this.timestamp = Date.now();
+            this.lastResumeAt = 0;
             this.url = location.href;
             setInterval(() => {
                 if (this.url !== location.href) {
                     this.url = location.href;
-                    this.timestamp = Date.now();
-                    if (this.active && !this.moving && !Guard.isRestricted()) setTimeout(() => this.resume(), 800);
+                    if (this.active && !this.moving) setTimeout(() => this.resume(), 1000);
                 }
             }, 1000);
-            setInterval(() => {
-                if (this.active && Date.now() - this.timestamp > 35000 && !Guard.isRestricted()) {
-                    this.moving = false;
-                    this.timestamp = Date.now();
-                    this.forward();
-                }
-            }, 5000);
             if (this.active) {
                 if (this.ui.keepAlive) Stealth.keepAlive();
-                if (Guard.isRestricted()) this.pause(Guard.state.tag);
-                else {
-                    this.ui.status('运行');
-                    setTimeout(() => this.resume(), 1000);
-                }
+                this.ui.status('运行');
+                setTimeout(() => this.resume(), 1000);
             }
         }
         get active() { return sessionStorage.getItem('lda_active') === 'true'; }
@@ -391,45 +272,40 @@
         set page(v) { sessionStorage.setItem('lda_page', v); }
         get count() { return parseInt(sessionStorage.getItem('lda_count') || '0'); }
         set count(v) { sessionStorage.setItem('lda_count', v); }
-        pause(tag) {
-            this.moving = false;
-            this.ui.status(`暂停(${tag})`);
-        }
-        resumeLimit() {
-            if (!this.active) return;
-            this.ui.status('运行');
-            Guard.isNormal() ? this.resume() : location.assign('/latest');
-        }
         start() {
+            sessionStorage.removeItem('lda_pause_until');
             if (this.ui.keepAlive) Stealth.keepAlive();
             this.active = true;
             this.count = 0;
-            this.timestamp = Date.now();
-            if (Guard.isRestricted()) {
-                this.pause(Guard.state.tag);
-                this.ui.log(`限制等待：剩余 ${Math.ceil((Guard.state.until - Date.now()) / 60000)} 分钟`);
-                return;
-            }
             this.ui.status('运行');
-            Net.fetch('/session/current.json', this).catch(()=>{});
             this.resume();
         }
         stop() {
             this.active = false;
             this.moving = false;
+            sessionStorage.removeItem('lda_pause_until');
             this.ui.status('停止');
             Stealth.suspendKeepAlive();
         }
+        pause(sec) {
+            if (!this.active) return;
+            const ms = sec * 1000;
+            this.stop();
+            sessionStorage.setItem('lda_pause_until', String(Date.now() + ms));
+            this.ui.status('暂停');
+            setTimeout(() => {
+                const until = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
+                if (until && Date.now() >= until) {
+                    sessionStorage.removeItem('lda_pause_until');
+                    console.log('解除限流：恢复运行');
+                    this.start();
+                }
+            }, ms);
+        }
         async resume() {
-            if (!this.active || Stealth.isChallenge() || Guard.isRestricted()) return;
-            this.timestamp = Date.now();
+            if (!this.active) return;
             if (Tool.topic()) await this.browse();
             else await this.forward();
-        }
-        plan() {
-            const vh = window.innerHeight || 800;
-            const top = Math.floor(vh * (this.ui.full ? 0.35 : 0.65)) + Tool.rand(-20, 40);
-            return { top, delay: Math.floor(top * 1.5) + Tool.rand(200, 400) };
         }
         async finishTopic(id) {
             if (id && !this.history.includes(id)) {
@@ -441,79 +317,122 @@
             this.count++;
             this.ui.updateReadCount(this.count);
             if (this.ui.limit > 0 && this.count >= this.ui.limit) this.stop();
+            if (this.active) {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                await Tool.wait(Tool.rand(3, 7) * 500, this);
+            }
             await this.forward();
         }
         async browse() {
-            if (this.moving || Guard.isRestricted()) return;
+            if (this.moving) return;
             this.moving = true;
-            this.ui.log(`开始阅读：${Tool.title()}`);
             const id = Tool.identity();
-            if (id) Net.fetch(`/t/topic/${id}.json`, this).catch(()=>{});
-            if (this.ui.full && window.scrollY > 100) {
-                window.scrollTo(0, 0);
-                if (!(await Tool.wait(600, this))) return;
-            }
-            if (!(await Tool.wait(800, this))) return;
-            await this.liker.execute(this);
-            if (!(await Tool.wait(Tool.rand(1200, 2000), this))) return;
-            const enter = Date.now();
+            if (this.ui.full && window.scrollY > 100) window.scrollTo(0, 0);
+            if (!(await Tool.wait(500, this))) return;
+            console.log(`开始阅读：${Tool.title()}`);
             while (this.active && this.moving) {
-                if (Guard.isRestricted()) { this.moving = false; return; }
-                this.timestamp = Date.now();
-                const step = this.plan();
-                const curY = window.scrollY;
-                window.scrollBy({ top: step.top, behavior: 'smooth' });
-                setTimeout(() => {
-                    if (window.scrollY === curY && this.active && this.moving) {
-                        window.scrollBy(0, step.top);
-                    }
-                }, 100);
-                if (!(await Tool.wait(step.delay, this))) return;
-                await this.liker.execute(this);
-                if (Tool.bottom() && Tool.ready()) {
-                    let checks = 0;
-                    while (Tool.hasUnreadBlueDot() && checks < 4) {
-                        window.scrollBy({ top: Tool.rand(20, 50), behavior: 'smooth' });
-                        if (!(await Tool.wait(600, this))) return;
-                        checks++;
-                    }
-                    if (Tool.hasUnreadBlueDot()) {
-                        this.ui.log('开始验证：CF Challenge');
-                        const cfWin = Stealth.openChallenge();
-                        while (cfWin && !cfWin.closed && this.active) {
-                            if (!(await Tool.wait(1000, this))) return;
-                        }
-                        if (!(await Tool.wait(1000, this))) return;
-                    }
-                    await this.finishTopic(id);
-                    return;
+                let tLoad = Date.now();
+                while (this.active && this.moving && !Tool.ready()) {
+                    if (Date.now() - tLoad > 15000) break;
+                    if (!(await Tool.wait(500, this))) return;
                 }
-                if (Date.now() - enter > Tool.rand(180000, 300000)) {
-                    await this.finishTopic(id);
+                const dot = Tool.nextDot();
+                if (dot) {
+                    const anchor = (dot.closest('.topic-post') || dot).getBoundingClientRect();
+                    const target = anchor.top + window.scrollY - window.innerHeight * 0.3;
+                    window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+                } else {
+                    const vh = window.innerHeight ||  800;
+                    const step = Math.floor(vh * (this.ui.full ? 0.4 : 0.7));
+                    window.scrollBy({ top: step, behavior: 'smooth' });
+                }
+                if (!(await Tool.wait(500, this))) return;
+                await this.liker.execute(this);
+                const t1 = Date.now();
+                let waited = false;
+                while (this.active && this.moving) {
+                    if (Date.now() - t1 >= 8000) break;
+                    if (Tool.dots().length === 0) break;
+                    if (!waited) { waited = true; console.log(`等待蓝点：剩余 ${Tool.dots().length} 个`); }
+                    if (!(await Tool.wait(500, this))) return;
+                }
+                if (Tool.bottom() && Tool.ready()) {
+                    const t0 = Date.now();
+                    while (this.active && this.moving) {
+                        if (Date.now() - t0 >= 10000) break;
+                        if (!(await Tool.wait(500, this))) return;
+                        if (!(await this.hasUnread(id))) {
+                            await this.finishTopic(id);
+                            return;
+                        }
+                    }
+                    if (this.active && this.moving) {
+                        const ok = await this.sendTimings(id);
+                        if (ok) {
+                            await this.finishTopic(id);
+                        } else if (this.active && this.moving) {
+                            console.log('上报失败：跳过当前');
+                            await this.finishTopic(id);
+                        }
+                    }
                     return;
                 }
             }
         }
-        async fetch() {
+        async hasUnread(id) {
             try {
-                const d = await Net.fetch(`/latest.json?no_definitions=true&page=${this.page}`, this);
-                let list = d?.topic_list?.topics;
-                if (!list) throw new Error();
-                if (this.ui.skip) list = list.filter(t => !this.history.includes(t.id.toString()));
-                if (list.length > 0) {
-                    this.queue = list;
-                    this.ui.log(`获取列表：${list.length} 篇`);
-                    return true;
-                }
-                this.page++;
-                if (this.page > 15) { this.page = 0; return false; }
-                return await this.fetch();
+                const d = await Net.fetch(`/t/topic/${id}.json`);
+                return !d || (d.last_read_post_number || 0) < (d.highest_post_number || d.posts_count || 0);
+            } catch (_) { return true; }
+        }
+        async sendTimings(id) {
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+            const maxPost = this.maxLoadedPost();
+            if (!csrf || !maxPost) return false;
+            try {
+                const timings = {};
+                timings[maxPost] = 2;
+                const res = await fetch('/topics/timings', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json; charset=utf-8',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-Token': csrf,
+                        'Content-Type': 'application/json',
+                        'X-SILENCE-LOGGER': 'true',
+                        'Discourse-Background': 'true'
+                    },
+                    body: JSON.stringify({ timings, topic_time: 2, topic_id: id })
+                });
+                return res?.ok === true;
             } catch (_) { return false; }
         }
+        maxLoadedPost() {
+            let max = 0;
+            for (const el of document.querySelectorAll('.topic-post[data-post-number]')) {
+                const n = parseInt(el.getAttribute('data-post-number'));
+                if (n > max) max = n;
+            }
+            return max;
+        }
+        async fetch() {
+            const d = await Net.fetch(`/latest.json?no_definitions=true&page=${this.page}`);
+            let list = d?.topic_list?.topics;
+            if (!list) return false;
+            if (this.ui.skip) list = list.filter(t => !this.history.includes(t.id.toString()));
+            if (list.length > 0) {
+                this.queue = list;
+                console.log(`获取列表：${list.length} 篇`);
+                return true;
+            }
+            this.page++;
+            if (this.page > 15) { this.page = 0; return false; }
+            return await this.fetch();
+        }
         async forward() {
-            if (!this.active || Stealth.isChallenge() || Guard.isRestricted()) return;
-            this.timestamp = Date.now();
+            if (!this.active) return;
             let topics = this.queue;
+            if (this.ui.skip) topics = topics.filter(t => !this.history.includes(t.id.toString()));
             if (topics.length === 0) {
                 if (!(await this.fetch()) || this.queue.length === 0) { this.route('/latest'); return; }
                 topics = this.queue;
@@ -523,11 +442,9 @@
             if (t) this.route(t.last_read_post_number ? `/t/topic/${t.id}/${t.last_read_post_number}` : `/t/topic/${t.id}`);
         }
         route(url) {
-            try { if (window.DiscourseURL?.routeTo) return window.DiscourseURL.routeTo(url); } catch (_) {}
             location.assign(url);
         }
     }
-    // 界面
     class UI {
         constructor() {
             this.userLoaded = false;
@@ -566,7 +483,6 @@
                 #lda-box:not(.expanded) #lda-execute,
                 #lda-box:not(.expanded) .lda-group,
                 #lda-box:not(.expanded) .lda-extra-group,
-                #lda-box:not(.expanded) .lda-logger{display:none !important}
                 .lda-group{display:flex;flex-direction:column;gap:6px;width:100%}
                 .lda-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#1e293b;height:26px}
                 .lda-ctrl{display:flex;align-items:center;justify-content:flex-end;width:64px}
@@ -575,9 +491,6 @@
                 .lda-button{width:100%;height:32px;border:none;border-radius:10px;font-weight:600;cursor:pointer;color:#fff;font-size:13px;transition:all .2s;display:flex;align-items:center;justify-content:center}
                 .lda-button.start{background:linear-gradient(135deg,#06b6d4,#0d9488)}
                 .lda-button.stop{background:linear-gradient(135deg,#14b8a6,#10b981)}
-                .lda-logger{background:#f0fdfa;padding:8px;height:90px;overflow-y:auto;font-size:11px;color:#115e59;font-family:monospace;border:1px solid #ccfbf1;border-radius:8px;line-height:1.4}
-                .lda-logger::-webkit-scrollbar{width:4px}
-                .lda-logger::-webkit-scrollbar-thumb{background:#99f6e4;border-radius:2px}
                 #lda-threshold-label{cursor:pointer;user-select:none}
                 details summary::-webkit-details-marker, details summary::marker{display:none !important}
                 details summary{list-style:none;outline:none}
@@ -623,7 +536,6 @@
                             </div>
                         </details>
                     </div>
-                    <div class="lda-logger" id="lda-logger"></div>
                     <div class="lda-extra-group">
                         <details style="width:100%" id="lda-user-info-detail">
                             <summary class="lda-row" style="cursor:pointer" title="展开/收起">
@@ -681,16 +593,16 @@
             };
             document.getElementById('lda-cf-btn').onclick = (e) => {
                 e.stopPropagation();
-                if (!Stealth.isChallenge()) Stealth.openChallenge();
+                console.log('重新加载：完成 CF 验证');
+                location.reload();
             };
             this.executeBtn = document.getElementById('lda-execute');
             document.getElementById('lda-threshold-label').onclick = (e) => {
                 e.stopPropagation();
                 GM_setValue('lda_cooldown', 0);
-                Guard.state = { until: 0, tag: '' };
                 this.cooldown();
                 if (runner.active) this.status('运行');
-                this.log('已清除所有冷却与限制');
+                console.log('清除冷却：已清除');
             };
             const bindDetailLoader = (name, loader) => {
                 const detail = document.getElementById(`lda-${name}-info-detail`);
@@ -748,23 +660,6 @@
                                 if (label.includes('禁言')) details.silenced = val;
                                 if (label.includes('封禁')) details.suspended = val;
                             });
-                            if (!details.likedDays && !details.flagged) {
-                                doc.querySelectorAll('table tbody tr').forEach(tr => {
-                                    const cells = tr.querySelectorAll('td');
-                                    if (cells.length >= 3) {
-                                        const name = cells[0].textContent.trim();
-                                        const cur = cells[1].textContent.trim();
-                                        const req = cells[2].textContent.trim();
-                                        const valStr = `${cur}/${req}`;
-                                        if (name.includes('获赞天数')) details.likedDays = valStr;
-                                        else if (name.includes('不同用户') || (name.includes('获赞') && name.includes('用户'))) details.likedUsers = valStr;
-                                        else if (name.includes('被举报')) details.flagged = valStr;
-                                        else if (name.includes('举报用户') || name.includes('发起举报')) details.flaggedUsers = valStr;
-                                        else if (name.includes('禁言')) details.silenced = cur;
-                                        else if (name.includes('封禁')) details.suspended = cur;
-                                    }
-                                });
-                            }
                             resolve(details);
                         } catch (_) {
                             resolve(null);
@@ -782,18 +677,14 @@
             try {
                 const username = await this.getCurrentUsername();
                 if (!username) throw new Error('未登录');
-                const [userRes, summaryRes, connectData] = await Promise.all([
-                    fetch(`/u/${username}.json`).then(r => r.ok ? r.json() : null).catch(() => null),
+                const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+                const me = win.Discourse?.currentUser || {};
+                const [summaryRes, connectData] = await Promise.all([
                     fetch(`/u/${username}/summary.json`).then(r => r.ok ? r.json() : null).catch(() => null),
                     this.fetchConnectDetails()
                 ]);
-                const userData = userRes?.user || userRes;
                 const s = summaryRes?.user_summary || {};
-                let trustLevel = userData?.trust_level ?? s?.trust_level;
-                if (trustLevel === undefined) {
-                    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                    trustLevel = win.Discourse?.currentUser?.trust_level;
-                }
+                const trustLevel = me.trust_level ?? s?.trust_level;
                 const levels = ['Lv0', 'Lv1', 'Lv2', 'Lv3', 'Lv4'];
                 const levelStr = trustLevel !== undefined ? (levels[trustLevel] || `Lv${trustLevel}`) : 'Lv-';
                 const timeMinutes = Math.floor((s.time_read || 0) / 60);
@@ -824,7 +715,7 @@
                     <div class="lda-grid-item"><span>浏览话题</span><span class="lda-val">${s.topics_entered || 0}</span></div>
                     <div class="lda-grid-item"><span>点赞</span><span class="lda-val">${s.likes_given || 0}</span></div>
                     <div class="lda-grid-item"><span>获赞</span><span class="lda-val">${s.likes_received || 0}</span></div>
-                    <div class="lda-grid-item"><span>回复话题</span><span class="lda-val">${s.post_count || userData?.post_count || 0}</span></div>
+                    <div class="lda-grid-item"><span>回复话题</span><span class="lda-val">${s.post_count || me.post_count || 0}</span></div>
                     <div class="lda-grid-item"><span>获赞天数</span><span class="lda-val" style="${likedDaysColor}">${likedDays}</span></div>
                     <div class="lda-grid-item"><span>获赞用户</span><span class="lda-val" style="${likedUsersColor}">${likedUsers}</span></div>
                     <div class="lda-grid-item"><span>被举报帖子</span><span class="lda-val" style="${flaggedColor}">${flaggedVal}</span></div>
@@ -895,22 +786,17 @@
                 this.executeBtn.innerText = `已读: ${count}`;
             }
         }
-        log(msg) {
-            const el = document.getElementById('lda-logger');
-            if (!el) return;
-            const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-            const item = document.createElement('div');
-            item.innerText = `[${time}] ${msg}`;
-            el.appendChild(item);
-            el.scrollTop = el.scrollHeight;
-        }
     }
-    // 初始化
     Stealth.init();
     const ui = new UI();
     Interceptor.init(ui);
     const liker = new Liker(ui);
     const runner = new Runner(liker, ui);
-    Guard.init(runner);
-    ui.executeBtn.onclick = () => runner.active ? runner.stop() : runner.start();
+    Interceptor.runner = runner;
+    ui.executeBtn.onclick = () => {
+        if (runner.active) { runner.stop(); return; }
+        const until = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
+        if (until > Date.now()) { runner.stop(); return; }
+        runner.start();
+    };
 })();
