@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.4.0
+// @version      1.5.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -56,7 +56,10 @@
     };
     const Stealth = {
         audioCtx: null,
+        injected: false,
         init() {
+            if (this.injected) return;
+            this.injected = true;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const doc = win.document;
             try {
@@ -72,6 +75,7 @@
             });
         },
         keepAlive() {
+            this.init();
             try {
                 if (!this.audioCtx) {
                     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -368,16 +372,36 @@
                 if (this.history.length > 800) this.history.shift();
                 GM_setValue('lda_history', this.history);
             }
-            this.moving = false;
             this.count++;
             this.ui.updateReadCount(this.count);
-            if (this.ui.limit > 0 && this.count >= this.ui.limit) this.stop();
+            if (this.ui.limit > 0 && this.count >= this.ui.limit) {
+                this.moving = false;
+                this.stop();
+                return;
+            }
             await this.forward();
+            this.moving = false;
         }
         async browse() {
             if (this.moving) return;
             this.moving = true;
+            let waitDomCount = 0;
+            while (this.active && waitDomCount < 20) {
+                const curId = Tool.identity();
+                if (curId && !this.history.includes(curId) && document.querySelector('.topic-post') && Tool.title()) {
+                    break;
+                }
+                if (!(await Tool.wait(500, this))) {
+                    this.moving = false;
+                    return;
+                }
+                waitDomCount++;
+            }
             const id = Tool.identity();
+            if (!id) {
+                this.moving = false;
+                return;
+            }
             const maxP = this.ui.maxPosts;
             if (maxP > 0) {
                 let count = 0;
@@ -397,13 +421,19 @@
                 }
             }
             Tracker.execute(id);
-            if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
+            if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                this.moving = false;
+                return;
+            }
             console.log(`开始阅读：${Tool.title()}`);
             while (this.active && this.moving) {
                 let tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
                     if (Date.now() - tLoad > 10000) break;
-                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
+                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                        this.moving = false;
+                        return;
+                    }
                 }
                 const dot = Tool.nextDot();
                 if (dot) {
@@ -415,7 +445,10 @@
                     const step = Math.floor(vh * (this.ui.full ? 0.4 : 0.7));
                     window.scrollBy({ top: step, behavior: 'smooth' });
                 }
-                if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
+                if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                    this.moving = false;
+                    return;
+                }
                 await this.liker.execute(this);
                 const t1 = Date.now();
                 let waited = false;
@@ -423,14 +456,21 @@
                     if (Date.now() - t1 >= 10000) break;
                     if (Tool.dots().length === 0) break;
                     if (!waited) { waited = true; console.log(`等待蓝点：剩余 ${Tool.dots().length} 个`); }
-                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
+                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                        this.moving = false;
+                        return;
+                    }
                 }
                 if (Tool.bottom() && Tool.ready()) {
-                    if (!(await Tool.wait(3000, this))) return;
+                    if (!(await Tool.wait(3000, this))) {
+                        this.moving = false;
+                        return;
+                    }
                     await this.finishTopic(id);
                     return;
                 }
             }
+            this.moving = false;
         }
         async fetch() {
             const unreadData = await Net.fetch(`/unread.json?page=${this.page}`);
@@ -832,7 +872,6 @@
             }
         }
     }
-    Stealth.init();
     const ui = new UI();
     Interceptor.init(ui);
     const liker = new Liker(ui);
