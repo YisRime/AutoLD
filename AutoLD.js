@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.3.0
+// @version      1.4.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -25,10 +25,11 @@
     window.__ldaBooted = true;
     const Tool = {
         wait: async (ms, r) => {
-            const steps = Math.ceil(ms / 1000);
-            for (let i = 0; i < steps; i++) {
+            const target = ms ?? Tool.rand(1000, 3000);
+            const start = Date.now();
+            while (Date.now() - start < target) {
                 if (r && !r.active) return false;
-                await new Promise(res => setTimeout(res, 1000));
+                await new Promise(res => setTimeout(res, Math.min(200, target - (Date.now() - start))));
             }
             return true;
         },
@@ -69,17 +70,6 @@
                 win.addEventListener(evtName, e => e.stopImmediatePropagation(), true);
                 doc.addEventListener(evtName, e => e.stopImmediatePropagation(), true);
             });
-            setInterval(() => {
-                try {
-                    doc.dispatchEvent(new MouseEvent('mousemove', {
-                        bubbles: true,
-                        cancelable: true,
-                        view: win,
-                        clientX: Tool.rand(128, 1024),
-                        clientY: Tool.rand(128, 1024)
-                    }));
-                } catch (_) {}
-            }, Tool.rand(5, 15) * 1000);
         },
         keepAlive() {
             try {
@@ -171,7 +161,7 @@
                 const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary');
                 if (btn) Stealth.click(btn);
                 else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-            }, 1000);
+            }, Tool.rand(1000, 3000));
         },
         pause(res, isLike = false, data = null) {
             let sec = 0;
@@ -305,7 +295,7 @@
                 if (!btn) continue;
                 Stealth.click(btn);
                 console.log(`自动点赞：第 ${post.getAttribute('data-post-number')} 楼`);
-                if (!(await Tool.wait(1000, runner))) return;
+                if (!(await Tool.wait(Tool.rand(1000, 3000), runner))) return;
             }
         }
     }
@@ -320,13 +310,13 @@
             setInterval(() => {
                 if (this.url !== location.href) {
                     this.url = location.href;
-                    if (this.active && !this.moving) setTimeout(() => this.resume(), 1000);
+                    if (this.active && !this.moving) setTimeout(() => this.resume(), Tool.rand(1000, 3000));
                 }
             }, 1000);
             if (this.active) {
                 if (this.ui.keepAlive) Stealth.keepAlive();
                 this.ui.status('运行');
-                setTimeout(() => this.resume(), 1000);
+                setTimeout(() => this.resume(), Tool.rand(1000, 3000));
             }
         }
         get active() { return sessionStorage.getItem('lda_active') === 'true'; }
@@ -382,9 +372,6 @@
             this.count++;
             this.ui.updateReadCount(this.count);
             if (this.ui.limit > 0 && this.count >= this.ui.limit) this.stop();
-            if (this.active) {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
             await this.forward();
         }
         async browse() {
@@ -410,14 +397,13 @@
                 }
             }
             Tracker.execute(id);
-            if (this.ui.full && window.scrollY > 100) window.scrollTo(0, 0);
-            if (!(await Tool.wait(1000, this))) return;
+            if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
             console.log(`开始阅读：${Tool.title()}`);
             while (this.active && this.moving) {
                 let tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
                     if (Date.now() - tLoad > 10000) break;
-                    if (!(await Tool.wait(1000, this))) return;
+                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
                 }
                 const dot = Tool.nextDot();
                 if (dot) {
@@ -429,7 +415,7 @@
                     const step = Math.floor(vh * (this.ui.full ? 0.4 : 0.7));
                     window.scrollBy({ top: step, behavior: 'smooth' });
                 }
-                if (!(await Tool.wait(1000, this))) return;
+                if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
                 await this.liker.execute(this);
                 const t1 = Date.now();
                 let waited = false;
@@ -437,7 +423,7 @@
                     if (Date.now() - t1 >= 10000) break;
                     if (Tool.dots().length === 0) break;
                     if (!waited) { waited = true; console.log(`等待蓝点：剩余 ${Tool.dots().length} 个`); }
-                    if (!(await Tool.wait(1000, this))) return;
+                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
                 }
                 if (Tool.bottom() && Tool.ready()) {
                     if (!(await Tool.wait(3000, this))) return;
@@ -481,7 +467,17 @@
             if (t) this.route(t.last_read_post_number ? `/t/topic/${t.id}/${t.last_read_post_number}` : `/t/topic/${t.id}`);
         }
         route(url) {
-            location.assign(url);
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            if (win.DiscourseURL?.routeTo) {
+                win.DiscourseURL.routeTo(url);
+            } else {
+                const router = win.Discourse?.__container__?.lookup('service:router') || win.Discourse?.__container__?.lookup('router:main');
+                if (router?.transitionTo) {
+                    router.transitionTo(url);
+                } else {
+                    location.assign(url);
+                }
+            }
         }
     }
     class UI {
