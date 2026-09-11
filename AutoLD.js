@@ -1,8 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.2.0
-// @description  Linux Do 自动化
+// @version      1.2.1
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -139,13 +138,59 @@
             return null;
         }
     };
+    const Tracker = {
+        tracked: new Set(),
+        getSessionId() {
+            let val = document.querySelector('meta[name="discourse-track-view-session-id"]')?.content;
+            if (val) return val;
+            val = sessionStorage.getItem('lda_track_session');
+            if (!val) {
+                val = Date.now() + '-' + Math.random().toString(36).slice(2);
+                sessionStorage.setItem('lda_track_session', val);
+            }
+            return val;
+        },
+        markTracked(id) {
+            if (id) this.tracked.add(String(id));
+        },
+        execute(id) {
+            if (!id || this.tracked.has(String(id))) return;
+            this.markTracked(id);
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            const headers = {
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Discourse-Present': 'true'
+            };
+            if (csrf) headers['X-CSRF-Token'] = csrf;
+            fetch('/pageview', {
+                method: 'POST',
+                headers: {
+                    ...headers,
+                    'Discourse-Track-View-Deferred': 'true',
+                    'Discourse-Track-View-Topic-Id': String(id),
+                    'Discourse-Track-View-Url': location.href,
+                    'Discourse-Track-View-Referrer': document.referrer || '',
+                    'Discourse-Track-View-Session-Id': this.getSessionId()
+                }
+            }).catch(() => {});
+            fetch(`/t/${id}.json?track_visit=true&forceLoad=true`, {
+                method: 'GET',
+                headers: {
+                    ...headers,
+                    'Discourse-Track-View': 'true',
+                    'Discourse-Track-View-Topic-Id': String(id)
+                }
+            }).catch(() => {});
+        }
+    };
     const Interceptor = {
         ui: null,
         runner: null,
         pausing: 0,
         closePopup() {
             setTimeout(() => {
-                const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary, button.btn-primary');
+                const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary');
                 if (btn) Stealth.click(btn);
                 else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
             }, 500);
@@ -168,7 +213,7 @@
             const timeLeft = data?.extras?.time_left || waitSec;
             GM_setValue('lda_cooldown', waitSec > 0 ? Date.now() + waitSec * 1000 : Date.now() + 30 * 60 * 1000);
             if (this.ui) {
-                console.log(`点赞受限：剩余 ${timeLeft} 秒`);
+                console.log(`点赞限流：剩余 ${timeLeft} 秒`);
                 this.ui.cooldown();
             }
             this.closePopup();
@@ -177,11 +222,20 @@
             this.ui = ui;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const isLike = (u) => /toggle\.json|custom-reactions|discourse-reactions|post_actions/.test(String(u));
+            const isTrack = (u) => {
+                const str = String(u);
+                return str.includes('/pageview') || str.includes('track_visit=true');
+            };
             const origFetch = win.fetch;
             win.fetch = async (...args) => {
+                const urlStr = String(args[0]?.url || args[0]);
+                if (isTrack(urlStr)) {
+                    const idMatch = urlStr.match(/\/t\/(?:topic\/)?(\d+)/);
+                    Tracker.markTracked(idMatch ? idMatch[1] : Tool.identity());
+                }
                 const res = await origFetch.apply(win, args);
                 if (res.status === 429 || res.status === 403) this.pause(res);
-                if (isLike(args[0]?.url || args[0])) {
+                if (isLike(urlStr)) {
                     try {
                         const d = await res.clone().json();
                         if (d?.error_type === 'rate_limit') this.trigger(d);
@@ -191,7 +245,14 @@
             };
             const origOpen = win.XMLHttpRequest.prototype.open;
             const origSend = win.XMLHttpRequest.prototype.send;
-            win.XMLHttpRequest.prototype.open = function(m, u) { this._u = u; return origOpen.apply(this, arguments); };
+            win.XMLHttpRequest.prototype.open = function(m, u) { 
+                this._u = u; 
+                if (isTrack(u)) {
+                    const idMatch = String(u).match(/\/t\/(?:topic\/)?(\d+)/);
+                    Tracker.markTracked(idMatch ? idMatch[1] : Tool.identity());
+                }
+                return origOpen.apply(this, arguments); 
+            };
             win.XMLHttpRequest.prototype.send = function(...args) {
                 this.addEventListener('load', function() {
                     if (this.status === 429 || this.status === 403) Interceptor.pause(this);
@@ -240,7 +301,7 @@
                 if (!btn) continue;
                 Stealth.click(btn);
                 console.log(`自动点赞：第 ${post.getAttribute('data-post-number')} 楼`);
-                if (!(await Tool.wait(500, runner))) return;
+                if (!(await Tool.wait(1000, runner))) return;
             }
         }
     }
@@ -319,7 +380,6 @@
             if (this.ui.limit > 0 && this.count >= this.ui.limit) this.stop();
             if (this.active) {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
-                await Tool.wait(Tool.rand(3, 7) * 500, this);
             }
             await this.forward();
         }
@@ -327,6 +387,25 @@
             if (this.moving) return;
             this.moving = true;
             const id = Tool.identity();
+            const maxP = this.ui.maxPosts;
+            if (maxP > 0) {
+                let count = 0;
+                const timelineEl = document.querySelector('.timeline-replies');
+                if (timelineEl) {
+                    const match = timelineEl.innerText.match(/\/\s*(\d+)/);
+                    if (match) count = parseInt(match[1], 10);
+                }
+                if (!count) {
+                    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+                    count = win.Discourse?.__container__?.lookup('controller:topic')?.model?.posts_count || 0;
+                }
+                if (count > maxP) {
+                    console.log(`触发过滤：${count} > ${maxP} 楼`);
+                    await this.finishTopic(id);
+                    return;
+                }
+            }
+            Tracker.execute(id);
             if (this.ui.full && window.scrollY > 100) window.scrollTo(0, 0);
             if (!(await Tool.wait(500, this))) return;
             console.log(`开始阅读：${Tool.title()}`);
@@ -357,14 +436,10 @@
                     if (!(await Tool.wait(500, this))) return;
                 }
                 if (Tool.bottom() && Tool.ready()) {
-                    const t0 = Date.now();
-                    while (this.active && this.moving) {
-                        if (Date.now() - t0 >= 10000) break;
-                        if (!(await Tool.wait(500, this))) return;
-                        if (!(await this.hasUnread(id))) {
-                            await this.finishTopic(id);
-                            return;
-                        }
+                    if (!(await Tool.wait(2000, this))) return;
+                    if (!(await this.hasUnread(id))) {
+                        await this.finishTopic(id);
+                        return;
                     }
                     if (this.active && this.moving) {
                         const ok = await this.sendTimings(id);
@@ -420,6 +495,8 @@
             let list = d?.topic_list?.topics;
             if (!list) return false;
             if (this.ui.skip) list = list.filter(t => !this.history.includes(t.id.toString()));
+            const maxP = this.ui.maxPosts;
+            if (maxP > 0) list = list.filter(t => (t.posts_count || t.highest_post_number || 0) <= maxP);
             if (list.length > 0) {
                 this.queue = list;
                 console.log(`获取列表：${list.length} 篇`);
@@ -433,6 +510,8 @@
             if (!this.active) return;
             let topics = this.queue;
             if (this.ui.skip) topics = topics.filter(t => !this.history.includes(t.id.toString()));
+            const maxP = this.ui.maxPosts;
+            if (maxP > 0) topics = topics.filter(t => (t.posts_count || t.highest_post_number || 0) <= maxP);
             if (topics.length === 0) {
                 if (!(await this.fetch()) || this.queue.length === 0) { this.route('/latest'); return; }
                 topics = this.queue;
@@ -455,6 +534,7 @@
             this.cooldown();
         }
         get limit() { return parseInt(document.getElementById('lda-limit').value); }
+        get maxPosts() { return parseInt(document.getElementById('lda-maxPosts').value) || 0; }
         get threshold() { return parseInt(document.getElementById('lda-threshold').value); }
         get skip() { return document.getElementById('lda-skip').checked; }
         get full() { return document.getElementById('lda-full').checked; }
@@ -466,7 +546,6 @@
                 #lda-box.expanded::-webkit-scrollbar{width:4px}
                 #lda-box.expanded::-webkit-scrollbar-thumb{background:#99f6e4;border-radius:2px}
                 #lda-box.active-run{border-color:#5eead4;box-shadow:0 0 14px rgba(20,184,166,.4)}
-                #lda-box.active-run #lda-gear svg{animation:lda-spin 4s linear infinite}
                 @keyframes lda-spin{100%{transform:rotate(360deg)}}
                 #lda-panel-content{display:flex;flex-direction:column;gap:8px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;width:100%}
                 #lda-header{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#64748b;height:16px;padding:0 2px}
@@ -475,14 +554,20 @@
                 #lda-header a:hover{color:#0f766e;text-decoration:underline}
                 #lda-top-bar{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%;height:32px}
                 #lda-execute{flex:1;height:32px}
-                #lda-gear{width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:#0d9488;cursor:pointer;background:transparent;border:none;transition:color .2s;flex-shrink:0;box-sizing:border-box}
-                #lda-gear:hover{color:#0f766e}
+                #lda-gear{width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:#0d9488;cursor:pointer;background:transparent;border:none;transition:all .2s;flex-shrink:0;box-sizing:border-box;border-radius:8px}
+                #lda-gear:hover{color:#0f766e;background:#ccfbf1}
+                #lda-box:not(.expanded) .lda-icon-close{display:none}
+                #lda-box.expanded .lda-icon-gear{display:none}
+                #lda-box.expanded .lda-icon-close{display:block}
+                #lda-box.expanded #lda-gear{background:#f0fdfa;border:1px solid #ccfbf1}
+                #lda-box.expanded #lda-gear:hover{background:#ccfbf1}
+                #lda-box.active-run #lda-gear .lda-icon-gear{animation:lda-spin 4s linear infinite}
                 #lda-box:not(.expanded) #lda-panel-content{gap:0}
                 #lda-box:not(.expanded) #lda-top-bar{width:32px;height:32px;margin:0 auto}
                 #lda-box:not(.expanded) #lda-header,
                 #lda-box:not(.expanded) #lda-execute,
                 #lda-box:not(.expanded) .lda-group,
-                #lda-box:not(.expanded) .lda-extra-group,
+                #lda-box:not(.expanded) .lda-extra-group{display:none !important}
                 .lda-group{display:flex;flex-direction:column;gap:6px;width:100%}
                 .lda-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#1e293b;height:26px}
                 .lda-ctrl{display:flex;align-items:center;justify-content:flex-end;width:64px}
@@ -516,8 +601,11 @@
                     <div id="lda-top-bar">
                         <button id="lda-execute" class="lda-button start">开始</button>
                         <div id="lda-gear" title="展开/收起">
-                            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                            <svg class="lda-icon-gear" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                                 <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.485.485 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                            </svg>
+                            <svg class="lda-icon-close" viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                             </svg>
                         </div>
                     </div>
@@ -525,6 +613,7 @@
                         <div class="lda-row" title="自动跳过已经阅读过的话题"><span>跳过已读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-skip"></div></div>
                         <div class="lda-row" title="完整阅读每个话题未读内容"><span>完整阅读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-full"></div></div>
                         <div class="lda-row" title="设置本次阅读话题数量上限"><span>阅读限额</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-limit" min="0"></div></div>
+                        <div class="lda-row" title="阅读总数少于设定值的话题"><span>最大楼层</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-maxPosts" min="0"></div></div>
                         <div class="lda-row" title="自动点赞的赞数阈值 | 点击文字可重置冷却"><span id="lda-threshold-label">点赞阈值</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-threshold" min="-1"></div></div>
                         <details style="width:100%">
                             <summary class="lda-row" style="cursor:pointer" title="展开/收起">
@@ -571,7 +660,7 @@
                 e.stopPropagation();
                 this.box.classList.toggle('expanded');
             };
-            [['limit', 0, false], ['threshold', 0, false], ['skip', true, true], ['full', false, true]].forEach(([k, def, isChk]) => {
+            [['limit', 0, false], ['maxPosts', 0, false], ['threshold', 0, false], ['skip', true, true], ['full', false, true]].forEach(([k, def, isChk]) => {
                 const el = document.getElementById(`lda-${k}`);
                 if (isChk) {
                     el.checked = GM_getValue(`lda_${k}`, def);
