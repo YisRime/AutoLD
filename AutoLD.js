@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.2.1
+// @version      1.3.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -25,10 +25,10 @@
     window.__ldaBooted = true;
     const Tool = {
         wait: async (ms, r) => {
-            const steps = Math.ceil(ms / 500);
+            const steps = Math.ceil(ms / 1000);
             for (let i = 0; i < steps; i++) {
                 if (r && !r.active) return false;
-                await new Promise(res => setTimeout(res, 500));
+                await new Promise(res => setTimeout(res, 1000));
             }
             return true;
         },
@@ -75,11 +75,11 @@
                         bubbles: true,
                         cancelable: true,
                         view: win,
-                        clientX: Tool.rand(100, 300),
-                        clientY: Tool.rand(100, 300)
+                        clientX: Tool.rand(128, 1024),
+                        clientY: Tool.rand(128, 1024)
                     }));
                 } catch (_) {}
-            }, Tool.rand(16, 30) * 500);
+            }, Tool.rand(5, 15) * 1000);
         },
         keepAlive() {
             try {
@@ -140,16 +140,6 @@
     };
     const Tracker = {
         tracked: new Set(),
-        getSessionId() {
-            let val = document.querySelector('meta[name="discourse-track-view-session-id"]')?.content;
-            if (val) return val;
-            val = sessionStorage.getItem('lda_track_session');
-            if (!val) {
-                val = Date.now() + '-' + Math.random().toString(36).slice(2);
-                sessionStorage.setItem('lda_track_session', val);
-            }
-            return val;
-        },
         markTracked(id) {
             if (id) this.tracked.add(String(id));
         },
@@ -163,18 +153,7 @@
                 'Discourse-Present': 'true'
             };
             if (csrf) headers['X-CSRF-Token'] = csrf;
-            fetch('/pageview', {
-                method: 'POST',
-                headers: {
-                    ...headers,
-                    'Discourse-Track-View-Deferred': 'true',
-                    'Discourse-Track-View-Topic-Id': String(id),
-                    'Discourse-Track-View-Url': location.href,
-                    'Discourse-Track-View-Referrer': document.referrer || '',
-                    'Discourse-Track-View-Session-Id': this.getSessionId()
-                }
-            }).catch(() => {});
-            fetch(`/t/${id}.json?track_visit=true&forceLoad=true`, {
+            fetch(`/t/${id}.json?track_visit=true`, {
                 method: 'GET',
                 headers: {
                     ...headers,
@@ -187,36 +166,41 @@
     const Interceptor = {
         ui: null,
         runner: null,
-        pausing: 0,
         closePopup() {
             setTimeout(() => {
                 const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary');
                 if (btn) Stealth.click(btn);
                 else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-            }, 500);
+            }, 1000);
         },
-        pause(res) {
-            const now = Date.now();
-            if (now < this.pausing) return;
-            this.pausing = now + 5000;
-            let sec = 300;
+        pause(res, isLike = false, data = null) {
+            let sec = 0;
             const retryAfter = res?.headers?.get?.('Retry-After') || res?.getResponseHeader?.('Retry-After');
             if (retryAfter) {
                 const n = parseInt(retryAfter, 10);
                 if (n > 0) sec = n;
             }
+            if (!sec && data?.extras?.wait_seconds) {
+                const n = parseInt(data.extras.wait_seconds, 10);
+                if (n > 0) sec = n;
+            }
+            if (!sec) {
+                sec = isLike ? 24 * 3600 : 10 * 60;
+            }
+            if (isLike) {
+                GM_setValue('lda_cooldown', Date.now() + sec * 1000);
+                if (this.ui) {
+                    console.log(`点赞限流：剩余 ${sec} 秒`);
+                    this.ui.cooldown();
+                }
+                this.closePopup();
+                return;
+            }
             console.log(`接口限流：暂停 ${Math.round(sec / 60)} 分钟`);
             this.runner?.pause(sec);
         },
-        trigger(data) {
-            const waitSec = data?.extras?.wait_seconds || 0;
-            const timeLeft = data?.extras?.time_left || waitSec;
-            GM_setValue('lda_cooldown', waitSec > 0 ? Date.now() + waitSec * 1000 : Date.now() + 30 * 60 * 1000);
-            if (this.ui) {
-                console.log(`点赞限流：剩余 ${timeLeft} 秒`);
-                this.ui.cooldown();
-            }
-            this.closePopup();
+        trigger(data, res = null) {
+            this.pause(res, true, data);
         },
         init(ui) {
             this.ui = ui;
@@ -233,12 +217,26 @@
                     const idMatch = urlStr.match(/\/t\/(?:topic\/)?(\d+)/);
                     Tracker.markTracked(idMatch ? idMatch[1] : Tool.identity());
                 }
-                const res = await origFetch.apply(win, args);
-                if (res.status === 429 || res.status === 403) this.pause(res);
-                if (isLike(urlStr)) {
+                const isLikeUrl = isLike(urlStr);
+                let res;
+                try {
+                    res = await origFetch.apply(win, args);
+                } catch (e) {
+                    this.pause(null, isLikeUrl);
+                    throw e;
+                }
+                if (!res.ok) {
+                    let d = null;
+                    try {
+                        d = await res.clone().json();
+                    } catch (_) {}
+                    this.pause(res, isLikeUrl, d);
+                } else if (isLikeUrl) {
                     try {
                         const d = await res.clone().json();
-                        if (d?.error_type === 'rate_limit') this.trigger(d);
+                        if (d?.error_type || d?.errors) {
+                            this.pause(res, true, d);
+                        }
                     } catch (_) {}
                 }
                 return res;
@@ -255,13 +253,19 @@
             };
             win.XMLHttpRequest.prototype.send = function(...args) {
                 this.addEventListener('load', function() {
-                    if (this.status === 429 || this.status === 403) Interceptor.pause(this);
-                    if (isLike(this._u)) {
-                        try {
-                            const d = JSON.parse(this.responseText);
-                            if (d?.error_type === 'rate_limit') Interceptor.trigger(d);
-                        } catch (_) {}
+                    const isLikeUrl = isLike(this._u);
+                    let hasError = this.status >= 400 || this.status === 0;
+                    let d = null;
+                    try {
+                        d = JSON.parse(this.responseText);
+                        if (d?.error_type || d?.errors) hasError = true;
+                    } catch (_) {}
+                    if (hasError) {
+                        Interceptor.pause(this, isLikeUrl, d);
                     }
+                });
+                this.addEventListener('error', function() {
+                    Interceptor.pause(this, isLike(this._u));
                 });
                 return origSend.apply(this, args);
             };
@@ -407,13 +411,13 @@
             }
             Tracker.execute(id);
             if (this.ui.full && window.scrollY > 100) window.scrollTo(0, 0);
-            if (!(await Tool.wait(500, this))) return;
+            if (!(await Tool.wait(1000, this))) return;
             console.log(`开始阅读：${Tool.title()}`);
             while (this.active && this.moving) {
                 let tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
-                    if (Date.now() - tLoad > 15000) break;
-                    if (!(await Tool.wait(500, this))) return;
+                    if (Date.now() - tLoad > 10000) break;
+                    if (!(await Tool.wait(1000, this))) return;
                 }
                 const dot = Tool.nextDot();
                 if (dot) {
@@ -425,85 +429,38 @@
                     const step = Math.floor(vh * (this.ui.full ? 0.4 : 0.7));
                     window.scrollBy({ top: step, behavior: 'smooth' });
                 }
-                if (!(await Tool.wait(500, this))) return;
+                if (!(await Tool.wait(1000, this))) return;
                 await this.liker.execute(this);
                 const t1 = Date.now();
                 let waited = false;
                 while (this.active && this.moving) {
-                    if (Date.now() - t1 >= 8000) break;
+                    if (Date.now() - t1 >= 10000) break;
                     if (Tool.dots().length === 0) break;
                     if (!waited) { waited = true; console.log(`等待蓝点：剩余 ${Tool.dots().length} 个`); }
-                    if (!(await Tool.wait(500, this))) return;
+                    if (!(await Tool.wait(1000, this))) return;
                 }
                 if (Tool.bottom() && Tool.ready()) {
-                    if (!(await Tool.wait(2000, this))) return;
-                    if (!(await this.hasUnread(id))) {
-                        await this.finishTopic(id);
-                        return;
-                    }
-                    if (this.active && this.moving) {
-                        const ok = await this.sendTimings(id);
-                        if (ok) {
-                            await this.finishTopic(id);
-                        } else if (this.active && this.moving) {
-                            console.log('上报失败：跳过当前');
-                            await this.finishTopic(id);
-                        }
-                    }
+                    if (!(await Tool.wait(3000, this))) return;
+                    await this.finishTopic(id);
                     return;
                 }
             }
         }
-        async hasUnread(id) {
-            try {
-                const d = await Net.fetch(`/t/topic/${id}.json`);
-                return !d || (d.last_read_post_number || 0) < (d.highest_post_number || d.posts_count || 0);
-            } catch (_) { return true; }
-        }
-        async sendTimings(id) {
-            const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
-            const maxPost = this.maxLoadedPost();
-            if (!csrf || !maxPost) return false;
-            try {
-                const timings = {};
-                timings[maxPost] = 2;
-                const res = await fetch('/topics/timings', {
-                    method: 'POST',
-                    headers: {
-                        'Accept': 'application/json; charset=utf-8',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-Token': csrf,
-                        'Content-Type': 'application/json',
-                        'X-SILENCE-LOGGER': 'true',
-                        'Discourse-Background': 'true'
-                    },
-                    body: JSON.stringify({ timings, topic_time: 2, topic_id: id })
-                });
-                return res?.ok === true;
-            } catch (_) { return false; }
-        }
-        maxLoadedPost() {
-            let max = 0;
-            for (const el of document.querySelectorAll('.topic-post[data-post-number]')) {
-                const n = parseInt(el.getAttribute('data-post-number'));
-                if (n > max) max = n;
-            }
-            return max;
-        }
         async fetch() {
-            const d = await Net.fetch(`/latest.json?no_definitions=true&page=${this.page}`);
-            let list = d?.topic_list?.topics;
-            if (!list) return false;
+            const unreadData = await Net.fetch(`/unread.json?page=${this.page}`);
+            let list = unreadData?.topic_list?.topics;
+            if (!Array.isArray(list) || list.length === 0) {
+                return false;
+            }
+            console.log(`获取未读：${list.length} 篇`);
             if (this.ui.skip) list = list.filter(t => !this.history.includes(t.id.toString()));
             const maxP = this.ui.maxPosts;
             if (maxP > 0) list = list.filter(t => (t.posts_count || t.highest_post_number || 0) <= maxP);
             if (list.length > 0) {
                 this.queue = list;
-                console.log(`获取列表：${list.length} 篇`);
                 return true;
             }
             this.page++;
-            if (this.page > 15) { this.page = 0; return false; }
             return await this.fetch();
         }
         async forward() {
@@ -513,7 +470,10 @@
             const maxP = this.ui.maxPosts;
             if (maxP > 0) topics = topics.filter(t => (t.posts_count || t.highest_post_number || 0) <= maxP);
             if (topics.length === 0) {
-                if (!(await this.fetch()) || this.queue.length === 0) { this.route('/latest'); return; }
+                if (!(await this.fetch()) || this.queue.length === 0) {
+                    this.stop();
+                    return;
+                }
                 topics = this.queue;
             }
             const t = topics.shift();
@@ -707,15 +667,9 @@
             bindDetailLoader('user', () => this.loadUserInfo());
             bindDetailLoader('credit', () => this.loadCreditInfo());
         }
-        async getCurrentUsername() {
-            try {
-                const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                if (win.Discourse?.currentUser?.username) return win.Discourse.currentUser.username;
-                const res = await fetch('/session/current.json');
-                const data = await res.json();
-                return data?.current_user?.username;
-            } catch (_) {}
-            return null;
+        getCurrentUsername() {
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            return win.Discourse?.currentUser?.username || null;
         }
         async fetchConnectDetails() {
             if (!location.hostname.includes('linux.do')) return null;
@@ -764,7 +718,7 @@
             const list = document.getElementById('lda-user-list');
             btn.disabled = true;
             try {
-                const username = await this.getCurrentUsername();
+                const username = this.getCurrentUsername();
                 if (!username) throw new Error('未登录');
                 const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
                 const me = win.Discourse?.currentUser || {};
@@ -828,6 +782,7 @@
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: 'https://credit.linux.do/api/v1/oauth/user-info',
+                timeout: 10000,
                 responseType: 'json',
                 onload: (res) => {
                     btn.disabled = false;
@@ -852,6 +807,11 @@
                 onerror: () => {
                     btn.disabled = false;
                     list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">请求错误</div>`;
+                    btn.innerText = '重试';
+                },
+                ontimeout: () => {
+                    btn.disabled = false;
+                    list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">请求超时</div>`;
                     btn.innerText = '重试';
                 }
             });
