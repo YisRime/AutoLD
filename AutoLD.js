@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.7.0
+// @version      1.8.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -25,7 +25,7 @@
     window.__ldaBooted = true;
     const Tool = {
         wait: async (ms, r) => {
-            const target = ms ?? Tool.rand(1000, 3000);
+            const target = ms ?? Tool.rand(500, 2000);
             const start = Date.now();
             while (Date.now() - start < target) {
                 if (r && !r.active) return false;
@@ -42,18 +42,18 @@
             return Math.ceil(scrollTop + clientHeight) >= scrollHeight - 250;
         },
         ready: () => !document.querySelector('.loading, .infinite-scroll'),
-        topic: () => location.pathname.includes('/t/topic/'),
-        identity: () => location.pathname.match(/\/t\/topic\/(\d+)/)?.[1],
-        title: () => document.querySelector('#topic-title h1 a')?.innerText,
+        topic: () => /\/t\/(?:topic\/)?\d+/.test(location.pathname),
+        identity: () => location.pathname.match(/\/t\/(?:topic\/)?(\d+)/)?.[1],
+        title: () => document.querySelector('#topic-title h1 a, #topic-title .fancy-title')?.innerText?.trim(),
         dots: () => {
-            const vh = window.innerHeight ||  800;
+            const vh = window.innerHeight || 800;
             return Array.from(document.querySelectorAll('.topic-post .read-state:not(.read)')).filter(el => {
                 const r = el.getBoundingClientRect();
                 return r.top > -50 && r.top < vh + 50;
             });
         },
         nextDot: () => {
-            const vh = window.innerHeight ||  800;
+            const vh = window.innerHeight || 800;
             const all = Array.from(document.querySelectorAll('.topic-post .read-state:not(.read)'));
             const pick = all.filter(el => el.getBoundingClientRect().top > vh * 0.25);
             return pick.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
@@ -155,7 +155,7 @@
                 const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary');
                 if (btn) Stealth.click(btn);
                 else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-            }, Tool.rand(1000, 3000));
+            }, Tool.rand(500, 2000));
         },
         pause(res, isLike = false, data = null) {
             let sec = 0;
@@ -289,7 +289,7 @@
                 if (!btn) continue;
                 Stealth.click(btn);
                 console.log(`自动点赞：第 ${post.getAttribute('data-post-number')} 楼`);
-                if (!(await Tool.wait(Tool.rand(1000, 3000), runner))) return;
+                if (!(await Tool.wait(Tool.rand(500, 2000), runner))) return;
             }
         }
     }
@@ -299,7 +299,6 @@
             this.ui = ui;
             this.moving = false;
             this.history = GM_getValue('lda_history', []);
-            this.lastResumeAt = 0;
             this.url = location.href;
             setInterval(() => {
                 if (this.url !== location.href) {
@@ -308,39 +307,33 @@
                     const getTopicId = (u) => u.match(/\/t\/(?:topic\/)?(\d+)/)?.[1];
                     const prevId = getTopicId(prevUrl);
                     const curId = getTopicId(location.href);
-                    if (prevId && curId && prevId === curId) {
-                        return;
+                    if (prevId && curId && prevId === curId) return;
+                    if (this.active) {
+                        this.moving = false;
+                        setTimeout(() => this.resume(), Tool.rand(500, 2000));
                     }
-                    if (this.active && !this.moving) setTimeout(() => this.resume(), Tool.rand(1000, 3000));
                 }
             }, 1000);
             if (this.active) {
                 if (this.ui.keepAlive) Stealth.keepAlive();
                 this.ui.status('运行');
-                setTimeout(() => this.resume(), Tool.rand(1000, 3000));
+                setTimeout(() => this.resume(), Tool.rand(500, 2000));
             }
         }
         get active() { return sessionStorage.getItem('lda_active') === 'true'; }
         set active(v) { sessionStorage.setItem('lda_active', v); }
         get count() { return parseInt(sessionStorage.getItem('lda_count') || '0'); }
         set count(v) { sessionStorage.setItem('lda_count', v); }
-        pressKey(key, code, keyCode) {
+        navigate(url) {
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-            if (win.document.activeElement && win.document.activeElement !== win.document.body) {
-                win.document.activeElement.blur();
-            }
-            const opts = {
-                key: key,
-                code: code,
-                keyCode: keyCode,
-                which: keyCode,
-                bubbles: true,
-                cancelable: true,
-                composed: true,
-                view: win
-            };
-            win.document.dispatchEvent(new KeyboardEvent('keydown', opts));
-            win.document.dispatchEvent(new KeyboardEvent('keyup', opts));
+            try {
+                const router = win.Discourse?.__container__?.lookup('service:router');
+                if (router) {
+                    router.transitionTo(url);
+                    return;
+                }
+            } catch (_) {}
+            location.href = url;
         }
         start() {
             sessionStorage.removeItem('lda_pause_until');
@@ -391,14 +384,14 @@
                 this.stop();
                 return;
             }
-            await this.forward();
             this.moving = false;
+            await this.forward();
         }
         async browse() {
             if (this.moving) return;
             this.moving = true;
             let waitDomCount = 0;
-            while (this.active && waitDomCount < 20) {
+            while (this.active && waitDomCount < 25) {
                 const curId = Tool.identity();
                 if (curId && this.ui.skip && this.history.includes(String(curId))) {
                     console.log(`跳过已读：${curId}`);
@@ -406,7 +399,7 @@
                     await this.forward();
                     return;
                 }
-                if (curId && (!this.ui.skip || !this.history.includes(String(curId))) && document.querySelector('.topic-post') && Tool.title()) {
+                if (curId && document.querySelector('.topic-post') && Tool.title()) {
                     break;
                 }
                 if (!(await Tool.wait(500, this))) {
@@ -418,6 +411,7 @@
             const id = Tool.identity();
             if (!id) {
                 this.moving = false;
+                await this.forward();
                 return;
             }
             if (this.ui.skip && this.history.includes(String(id))) {
@@ -445,7 +439,7 @@
                 }
             }
             Tracker.execute(id);
-            if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+            if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
                 this.moving = false;
                 return;
             }
@@ -455,8 +449,8 @@
             while (this.active && this.moving) {
                 let tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
-                    if (Date.now() - tLoad > 10000) break;
-                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                    if (Date.now() - tLoad > 8000) break;
+                    if (!(await Tool.wait(1000, this))) {
                         this.moving = false;
                         return;
                     }
@@ -467,11 +461,11 @@
                     const target = anchor.top + window.scrollY - window.innerHeight * 0.3;
                     window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
                 } else {
-                    const vh = window.innerHeight ||  800;
-                    const step = Math.floor(vh * (this.ui.full ? 0.4 : 0.7));
+                    const vh = window.innerHeight || 800;
+                    const step = Math.floor(vh * (this.ui.full ? 0.4 : 0.75));
                     window.scrollBy({ top: step, behavior: 'smooth' });
                 }
-                if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
                     this.moving = false;
                     return;
                 }
@@ -479,10 +473,10 @@
                 const t1 = Date.now();
                 let waited = false;
                 while (this.active && this.moving) {
-                    if (Date.now() - t1 >= 10000) break;
+                    if (Date.now() - t1 >= 6000) break;
                     if (Tool.dots().length === 0) break;
                     if (!waited) { waited = true; console.log(`等待蓝点：剩余 ${Tool.dots().length} 个`); }
-                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                    if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
                         this.moving = false;
                         return;
                     }
@@ -495,7 +489,7 @@
                 }
                 lastScrollY = currentScrollY;
                 if (bottomStuckCount >= 1 && Tool.ready()) {
-                    if (!(await Tool.wait(Tool.rand(1500, 2500), this))) {
+                    if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
                         this.moving = false;
                         return;
                     }
@@ -505,46 +499,56 @@
             }
             this.moving = false;
         }
-        async navToLatest() {
-            this.pressKey('g', 'KeyG', 71);
-            if (!(await Tool.wait(500, this))) return;
-            this.pressKey('l', 'KeyL', 76);
-            let waitNav = 0;
-            while (this.active && !location.pathname.startsWith('/latest') && waitNav < 12) {
-                if (!(await Tool.wait(500, this))) return;
-                waitNav++;
-            }
-            if (this.active && !location.pathname.startsWith('/latest')) {
-                this.pressKey('u', 'KeyU', 85);
-            }
-        }
         async forward() {
             if (!this.active) return;
-            if (!location.pathname.startsWith('/latest')) {
-                await this.navToLatest();
-                return;
+            this.moving = true;
+            const isTopic = Tool.topic();
+            const isList = /^\/(latest|top|new|unread)?$/.test(location.pathname) || location.pathname.startsWith('/latest');
+            if (isTopic || !isList) {
+                this.navigate('/latest');
+                await Tool.wait(Tool.rand(500, 2000), this);
             }
-            let waitCount = 0;
-            while (this.active && !document.querySelector('.topic-list-item') && waitCount < 20) {
-                if (!(await Tool.wait(500, this))) return;
-                waitCount++;
-            }
+            let retry = 0;
             while (this.active) {
-                this.pressKey('j', 'KeyJ', 74);
-                if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
-                const row = document.querySelector('.topic-list-item.selected');
-                if (!row) continue;
-                const id = row.getAttribute('data-topic-id') || row.querySelector('a.title')?.href?.match(/\/t\/(?:topic\/)?(\d+)/)?.[1];
-                if (!id) continue;
-                if (this.ui.skip && this.history.includes(String(id))) continue;
-                if (this.ui.maxPosts > 0) {
-                    const count = parseInt(row.querySelector('.num.posts, .posts-map, .posts')?.innerText?.replace(/\D/g, '') || '0', 10);
-                    if (count > this.ui.maxPosts) continue;
+                const items = Array.from(document.querySelectorAll('.topic-list-item, tr[data-topic-id]'));
+                if (!items.length) {
+                    if (!(await Tool.wait(1000, this))) return;
+                    retry++;
+                    if (retry > 10) {
+                        this.navigate('/latest');
+                        retry = 0;
+                    }
+                    continue;
                 }
-                this.pressKey('Enter', 'Enter', 13);
-                this.pressKey('o', 'KeyO', 79);
-                return;
+                let targetLink = null;
+                for (const row of items) {
+                    const link = row.querySelector('a.title, a.raw-topic-link');
+                    const id = row.getAttribute('data-topic-id') || link?.href?.match(/\/t\/(?:topic\/)?(\d+)/)?.[1];
+                    if (!id) continue;
+                    if (this.ui.skip && this.history.includes(String(id))) continue;
+                    if (this.ui.maxPosts > 0) {
+                        const count = parseInt(row.querySelector('.posts-map, .posts, .num.posts')?.textContent?.replace(/\D/g, '') || '0', 10);
+                        if (count > this.ui.maxPosts) continue;
+                    }
+                    if (link) {
+                        targetLink = link;
+                        break;
+                    }
+                }
+                if (targetLink) {
+                    this.moving = false;
+                    console.log(`进入话题: ${targetLink.innerText?.trim() || targetLink.href}`);
+                    Stealth.click(targetLink);
+                    return;
+                }
+                window.scrollBy({ top: window.innerHeight * 0.85, behavior: 'smooth' });
+                if (!(await Tool.wait(Tool.rand(500, 2000), this))) return;
+                if (Tool.bottom()) {
+                    this.navigate('/latest');
+                    if (!(await Tool.wait(Tool.rand(500, 2000), this))) return;
+                }
             }
+            this.moving = false;
         }
     }
     class UI {
