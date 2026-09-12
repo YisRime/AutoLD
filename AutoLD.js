@@ -133,7 +133,7 @@
                 const n = parseInt(data.extras.wait_seconds, 10);
                 if (n > 0) sec = n;
             }
-            if (!sec) sec = isLike ? 24 * 3600 : 10 * 60;
+            if (!sec) sec = isLike ? 86400 : 300;
             if (isLike) {
                 GM_setValue('lda_cooldown', Date.now() + sec * 1000);
                 if (this.ui) {
@@ -399,7 +399,7 @@
                 }
                 let tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
-                    if (Date.now() - tLoad > 8000) break;
+                    if (Date.now() - tLoad > 10000) break;
                     if (!(await Tool.wait(500, this))) {
                         this.moving = false;
                         return;
@@ -422,13 +422,13 @@
                         this.moving = false;
                         return;
                     }
-                    if (Tool.dots().length === 0 || Date.now() - t1 >= 8000) break;
-                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                    if (Tool.dots().length === 0 || Date.now() - t1 >= 10000) break;
+                    if (!(await Tool.wait(1000, this))) {
                         this.moving = false;
                         return;
                     }
                 }
-                if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
+                if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
                     this.moving = false;
                     return;
                 }
