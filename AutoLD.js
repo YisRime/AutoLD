@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.6.0
+// @version      1.7.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -34,21 +34,27 @@
             return true;
         },
         rand: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
-        bottom: () => Math.ceil(window.scrollY + window.innerHeight) >= document.body.scrollHeight - 200,
+        bottom: () => {
+            const doc = document.documentElement;
+            const scrollHeight = Math.max(document.body.scrollHeight, doc.scrollHeight);
+            const scrollTop = window.scrollY || doc.scrollTop || 0;
+            const clientHeight = window.innerHeight || doc.clientHeight;
+            return Math.ceil(scrollTop + clientHeight) >= scrollHeight - 250;
+        },
         ready: () => !document.querySelector('.loading, .infinite-scroll'),
         topic: () => location.pathname.includes('/t/topic/'),
         identity: () => location.pathname.match(/\/t\/topic\/(\d+)/)?.[1],
         title: () => document.querySelector('#topic-title h1 a')?.innerText,
         dots: () => {
             const vh = window.innerHeight ||  800;
-            return Array.from(document.querySelectorAll('.read-state:not(.read)')).filter(el => {
+            return Array.from(document.querySelectorAll('.topic-post .read-state:not(.read)')).filter(el => {
                 const r = el.getBoundingClientRect();
                 return r.top > -50 && r.top < vh + 50;
             });
         },
         nextDot: () => {
             const vh = window.innerHeight ||  800;
-            const all = Array.from(document.querySelectorAll('.read-state:not(.read)'));
+            const all = Array.from(document.querySelectorAll('.topic-post .read-state:not(.read)'));
             const pick = all.filter(el => el.getBoundingClientRect().top > vh * 0.25);
             return pick.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
         }
@@ -297,7 +303,14 @@
             this.url = location.href;
             setInterval(() => {
                 if (this.url !== location.href) {
+                    const prevUrl = this.url;
                     this.url = location.href;
+                    const getTopicId = (u) => u.match(/\/t\/(?:topic\/)?(\d+)/)?.[1];
+                    const prevId = getTopicId(prevUrl);
+                    const curId = getTopicId(location.href);
+                    if (prevId && curId && prevId === curId) {
+                        return;
+                    }
                     if (this.active && !this.moving) setTimeout(() => this.resume(), Tool.rand(1000, 3000));
                 }
             }, 1000);
@@ -365,8 +378,9 @@
             else await this.forward();
         }
         async finishTopic(id) {
-            if (id && !this.history.includes(id)) {
-                this.history.push(id);
+            const strId = String(id);
+            if (strId && !this.history.includes(strId)) {
+                this.history.push(strId);
                 if (this.history.length > 1024) this.history.shift();
                 GM_setValue('lda_history', this.history);
             }
@@ -386,7 +400,13 @@
             let waitDomCount = 0;
             while (this.active && waitDomCount < 20) {
                 const curId = Tool.identity();
-                if (curId && !this.history.includes(curId) && document.querySelector('.topic-post') && Tool.title()) {
+                if (curId && this.ui.skip && this.history.includes(String(curId))) {
+                    console.log(`跳过已读：${curId}`);
+                    this.moving = false;
+                    await this.forward();
+                    return;
+                }
+                if (curId && (!this.ui.skip || !this.history.includes(String(curId))) && document.querySelector('.topic-post') && Tool.title()) {
                     break;
                 }
                 if (!(await Tool.wait(500, this))) {
@@ -398,6 +418,12 @@
             const id = Tool.identity();
             if (!id) {
                 this.moving = false;
+                return;
+            }
+            if (this.ui.skip && this.history.includes(String(id))) {
+                console.log(`跳过已读：${id}`);
+                this.moving = false;
+                await this.forward();
                 return;
             }
             const maxP = this.ui.maxPosts;
@@ -424,6 +450,8 @@
                 return;
             }
             console.log(`开始阅读：${Tool.title()}`);
+            let lastScrollY = -1;
+            let bottomStuckCount = 0;
             while (this.active && this.moving) {
                 let tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
@@ -459,8 +487,15 @@
                         return;
                     }
                 }
-                if (Tool.bottom() && Tool.ready()) {
-                    if (!(await Tool.wait(3000, this))) {
+                const currentScrollY = window.scrollY || document.documentElement.scrollTop;
+                if (Tool.bottom() || (lastScrollY === currentScrollY && currentScrollY > 0)) {
+                    bottomStuckCount++;
+                } else {
+                    bottomStuckCount = 0;
+                }
+                lastScrollY = currentScrollY;
+                if (bottomStuckCount >= 1 && Tool.ready()) {
+                    if (!(await Tool.wait(Tool.rand(1500, 2500), this))) {
                         this.moving = false;
                         return;
                     }
@@ -470,10 +505,23 @@
             }
             this.moving = false;
         }
+        async navToLatest() {
+            this.pressKey('g', 'KeyG', 71);
+            if (!(await Tool.wait(500, this))) return;
+            this.pressKey('l', 'KeyL', 76);
+            let waitNav = 0;
+            while (this.active && !location.pathname.startsWith('/latest') && waitNav < 12) {
+                if (!(await Tool.wait(500, this))) return;
+                waitNav++;
+            }
+            if (this.active && !location.pathname.startsWith('/latest')) {
+                this.pressKey('u', 'KeyU', 85);
+            }
+        }
         async forward() {
             if (!this.active) return;
             if (!location.pathname.startsWith('/latest')) {
-                this.route('/latest');
+                await this.navToLatest();
                 return;
             }
             let waitCount = 0;
@@ -496,19 +544,6 @@
                 this.pressKey('Enter', 'Enter', 13);
                 this.pressKey('o', 'KeyO', 79);
                 return;
-            }
-        }
-        route(url) {
-            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-            if (win.DiscourseURL?.routeTo) {
-                win.DiscourseURL.routeTo(url);
-            } else {
-                const router = win.Discourse?.__container__?.lookup('service:router') || win.Discourse?.__container__?.lookup('router:main');
-                if (router?.transitionTo) {
-                    router.transitionTo(url);
-                } else {
-                    location.assign(url);
-                }
             }
         }
     }
