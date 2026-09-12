@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.8.0
+// @version      1.8.9
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -29,7 +29,7 @@
             const start = Date.now();
             while (Date.now() - start < target) {
                 if (r && !r.active) return false;
-                await new Promise(res => setTimeout(res, Math.min(200, target - (Date.now() - start))));
+                await new Promise(res => setTimeout(res, Math.min(100, target - (Date.now() - start))));
             }
             return true;
         },
@@ -38,12 +38,22 @@
             const doc = document.documentElement;
             const scrollHeight = Math.max(document.body.scrollHeight, doc.scrollHeight);
             const scrollTop = window.scrollY || doc.scrollTop || 0;
-            const clientHeight = window.innerHeight || doc.clientHeight;
-            return Math.ceil(scrollTop + clientHeight) >= scrollHeight - 250;
+            return Math.ceil(scrollTop + (window.innerHeight || doc.clientHeight)) >= scrollHeight - 250;
         },
         ready: () => !document.querySelector('.loading, .infinite-scroll'),
-        topic: () => /\/t\/(?:topic\/)?\d+/.test(location.pathname),
-        identity: () => location.pathname.match(/\/t\/(?:topic\/)?(\d+)/)?.[1],
+        topic: () => /\/t\/(?:[^\/]+\/)?\d+/.test(location.pathname),
+        identity: (url = location.href) => {
+            try {
+                const parts = new URL(url, location.origin).pathname.split('/').filter(Boolean);
+                const tIndex = parts.indexOf('t');
+                if (tIndex !== -1) {
+                    for (let i = tIndex + 1; i < parts.length; i++) {
+                        if (/^\d+$/.test(parts[i])) return parts[i];
+                    }
+                }
+            } catch (_) {}
+            return null;
+        },
         title: () => document.querySelector('#topic-title h1 a, #topic-title .fancy-title')?.innerText?.trim(),
         dots: () => {
             const vh = window.innerHeight || 800;
@@ -54,8 +64,7 @@
         },
         nextDot: () => {
             const vh = window.innerHeight || 800;
-            const all = Array.from(document.querySelectorAll('.topic-post .read-state:not(.read)'));
-            const pick = all.filter(el => el.getBoundingClientRect().top > vh * 0.25);
+            const pick = Array.from(document.querySelectorAll('.topic-post .read-state:not(.read)')).filter(el => el.getBoundingClientRect().top > vh * 0.25);
             return pick.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
         }
     };
@@ -94,16 +103,12 @@
                         osc.start();
                     }
                 }
-                if (this.audioCtx?.state === 'suspended') {
-                    this.audioCtx.resume();
-                }
+                if (this.audioCtx?.state === 'suspended') this.audioCtx.resume();
             } catch (_) {}
         },
         suspendKeepAlive() {
             try {
-                if (this.audioCtx?.state === 'running') {
-                    this.audioCtx.suspend();
-                }
+                if (this.audioCtx?.state === 'running') this.audioCtx.suspend();
             } catch (_) {}
         },
         click(el) {
@@ -128,25 +133,7 @@
             });
         }
     };
-    const Net = {
-        async fetch(url) {
-            try {
-                const res = await fetch(url);
-                if (res.ok) return await res.json();
-            } catch (_) {}
-            return null;
-        }
-    };
-    const Tracker = {
-        tracked: new Set(),
-        markTracked(id) {
-            if (id) this.tracked.add(String(id));
-        },
-        execute(id) {
-            if (!id || this.tracked.has(String(id))) return;
-            this.markTracked(id);
-        }
-    };
+    const trackedTopics = new Set();
     const Interceptor = {
         ui: null,
         runner: null,
@@ -168,9 +155,7 @@
                 const n = parseInt(data.extras.wait_seconds, 10);
                 if (n > 0) sec = n;
             }
-            if (!sec) {
-                sec = isLike ? 24 * 3600 : 10 * 60;
-            }
+            if (!sec) sec = isLike ? 24 * 3600 : 10 * 60;
             if (isLike) {
                 GM_setValue('lda_cooldown', Date.now() + sec * 1000);
                 if (this.ui) {
@@ -183,23 +168,17 @@
             console.log(`接口限流：暂停 ${Math.round(sec / 60)} 分钟`);
             this.runner?.pause(sec);
         },
-        trigger(data, res = null) {
-            this.pause(res, true, data);
-        },
         init(ui) {
             this.ui = ui;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const isLike = (u) => /toggle\.json|custom-reactions|discourse-reactions|post_actions/.test(String(u));
-            const isTrack = (u) => {
-                const str = String(u);
-                return str.includes('/pageview') || str.includes('track_visit=true');
-            };
+            const isTrack = (u) => String(u).includes('/pageview') || String(u).includes('track_visit=true');
             const origFetch = win.fetch;
             win.fetch = async (...args) => {
                 const urlStr = String(args[0]?.url || args[0]);
                 if (isTrack(urlStr)) {
-                    const idMatch = urlStr.match(/\/t\/(?:topic\/)?(\d+)/);
-                    Tracker.markTracked(idMatch ? idMatch[1] : Tool.identity());
+                    const idMatch = Tool.identity(urlStr) || Tool.identity();
+                    if (idMatch) trackedTopics.add(String(idMatch));
                 }
                 const isLikeUrl = isLike(urlStr);
                 let res;
@@ -211,16 +190,12 @@
                 }
                 if (!res.ok) {
                     let d = null;
-                    try {
-                        d = await res.clone().json();
-                    } catch (_) {}
+                    try { d = await res.clone().json(); } catch (_) {}
                     this.pause(res, isLikeUrl, d);
                 } else if (isLikeUrl) {
                     try {
                         const d = await res.clone().json();
-                        if (d?.error_type || d?.errors) {
-                            this.pause(res, true, d);
-                        }
+                        if (d?.error_type || d?.errors) this.pause(res, true, d);
                     } catch (_) {}
                 }
                 return res;
@@ -230,8 +205,8 @@
             win.XMLHttpRequest.prototype.open = function(m, u) { 
                 this._u = u; 
                 if (isTrack(u)) {
-                    const idMatch = String(u).match(/\/t\/(?:topic\/)?(\d+)/);
-                    Tracker.markTracked(idMatch ? idMatch[1] : Tool.identity());
+                    const idMatch = Tool.identity(String(u)) || Tool.identity();
+                    if (idMatch) trackedTopics.add(String(idMatch));
                 }
                 return origOpen.apply(this, arguments); 
             };
@@ -244,9 +219,7 @@
                         d = JSON.parse(this.responseText);
                         if (d?.error_type || d?.errors) hasError = true;
                     } catch (_) {}
-                    if (hasError) {
-                        Interceptor.pause(this, isLikeUrl, d);
-                    }
+                    if (hasError) Interceptor.pause(this, isLikeUrl, d);
                 });
                 this.addEventListener('error', function() {
                     Interceptor.pause(this, isLike(this._u));
@@ -258,6 +231,10 @@
     class Liker {
         constructor(ui) {
             this.ui = ui;
+            this.processedPosts = new Set();
+        }
+        reset() {
+            this.processedPosts.clear();
         }
         cooling() { return GM_getValue('lda_cooldown', 0) > Date.now(); }
         getScore(post) {
@@ -273,22 +250,32 @@
             const btn = el.querySelector('button.btn-toggle-reaction-like, .discourse-reactions-reaction-button button, button.like');
             return !btn || btn.classList.contains('has-like') || btn.classList.contains('liked') || btn.getAttribute('aria-pressed') === 'true' || !!el.querySelector('.has-like, .my-reaction');
         }
+        isInViewport(el) {
+            const rect = el.getBoundingClientRect();
+            return rect.top < (window.innerHeight || 800) - 40 && rect.bottom > 40;
+        }
         async execute(runner) {
             if (this.cooling()) {
                 this.ui.cooldown();
                 return;
             }
             const threshold = this.ui.threshold;
-            const topBound = window.scrollY + window.innerHeight + 100;
             for (const post of Array.from(document.querySelectorAll('.topic-post'))) {
                 if (this.cooling() || !runner.active) return;
-                if (post.offsetTop > topBound) continue;
-                if (this.isLiked(post)) continue;
+                const postKey = post.getAttribute('data-post-id') || post.getAttribute('data-post-number') || post.id;
+                if (!postKey || this.processedPosts.has(postKey)) continue;
+                if (!this.isInViewport(post)) continue;
+                if (this.isLiked(post)) {
+                    this.processedPosts.add(postKey);
+                    continue;
+                }
                 if (threshold > 0 && this.getScore(post) < threshold) continue;
                 const btn = post.querySelector('button.btn-toggle-reaction-like, .discourse-reactions-reaction-button button, button.like');
                 if (!btn) continue;
+
+                this.processedPosts.add(postKey);
                 Stealth.click(btn);
-                console.log(`自动点赞：第 ${post.getAttribute('data-post-number')} 楼`);
+                console.log(`自动点赞：第 ${post.getAttribute('data-post-number') || postKey} 楼`);
                 if (!(await Tool.wait(Tool.rand(500, 2000), runner))) return;
             }
         }
@@ -298,26 +285,28 @@
             this.liker = liker;
             this.ui = ui;
             this.moving = false;
+            this.currentTopicId = null;
             this.history = GM_getValue('lda_history', []);
             this.url = location.href;
             setInterval(() => {
                 if (this.url !== location.href) {
                     const prevUrl = this.url;
                     this.url = location.href;
-                    const getTopicId = (u) => u.match(/\/t\/(?:topic\/)?(\d+)/)?.[1];
-                    const prevId = getTopicId(prevUrl);
-                    const curId = getTopicId(location.href);
+                    const prevId = Tool.identity(prevUrl);
+                    const curId = Tool.identity(location.href);
                     if (prevId && curId && prevId === curId) return;
                     if (this.active) {
                         this.moving = false;
-                        setTimeout(() => this.resume(), Tool.rand(500, 2000));
+                        this.currentTopicId = null;
+                        this.liker.reset();
+                        this.resume();
                     }
                 }
-            }, 1000);
+            }, 500);
             if (this.active) {
                 if (this.ui.keepAlive) Stealth.keepAlive();
                 this.ui.status('运行');
-                setTimeout(() => this.resume(), Tool.rand(500, 2000));
+                this.resume();
             }
         }
         get active() { return sessionStorage.getItem('lda_active') === 'true'; }
@@ -328,10 +317,7 @@
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             try {
                 const router = win.Discourse?.__container__?.lookup('service:router');
-                if (router) {
-                    router.transitionTo(url);
-                    return;
-                }
+                if (router) { router.transitionTo(url); return; }
             } catch (_) {}
             location.href = url;
         }
@@ -341,11 +327,14 @@
             this.active = true;
             this.count = 0;
             this.ui.status('运行');
+            this.liker.reset();
             this.resume();
         }
         stop() {
             this.active = false;
             this.moving = false;
+            this.currentTopicId = null;
+            this.liker.reset();
             sessionStorage.removeItem('lda_pause_until');
             this.ui.status('停止');
             Stealth.suspendKeepAlive();
@@ -379,19 +368,20 @@
             }
             this.count++;
             this.ui.updateReadCount(this.count);
+            this.currentTopicId = null;
+            this.liker.reset();
+            this.moving = false;
             if (this.ui.limit > 0 && this.count >= this.ui.limit) {
-                this.moving = false;
                 this.stop();
                 return;
             }
-            this.moving = false;
             await this.forward();
         }
         async browse() {
             if (this.moving) return;
             this.moving = true;
             let waitDomCount = 0;
-            while (this.active && waitDomCount < 25) {
+            while (this.active && waitDomCount < 20) {
                 const curId = Tool.identity();
                 if (curId && this.ui.skip && this.history.includes(String(curId))) {
                     console.log(`跳过已读：${curId}`);
@@ -399,9 +389,7 @@
                     await this.forward();
                     return;
                 }
-                if (curId && document.querySelector('.topic-post') && Tool.title()) {
-                    break;
-                }
+                if (curId && document.querySelector('.topic-post') && Tool.title()) break;
                 if (!(await Tool.wait(500, this))) {
                     this.moving = false;
                     return;
@@ -420,6 +408,8 @@
                 await this.forward();
                 return;
             }
+            this.currentTopicId = String(id);
+            this.liker.reset();
             const maxP = this.ui.maxPosts;
             if (maxP > 0) {
                 let count = 0;
@@ -438,44 +428,39 @@
                     return;
                 }
             }
-            Tracker.execute(id);
-            if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
-                this.moving = false;
-                return;
-            }
+            trackedTopics.add(String(id));
             console.log(`开始阅读：${Tool.title()}`);
+            await this.liker.execute(this);
             let lastScrollY = -1;
             let bottomStuckCount = 0;
             while (this.active && this.moving) {
                 let tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
                     if (Date.now() - tLoad > 8000) break;
-                    if (!(await Tool.wait(1000, this))) {
+                    if (!(await Tool.wait(500, this))) {
                         this.moving = false;
                         return;
                     }
                 }
+                const vh = window.innerHeight || 800;
+                const minStep = Math.floor(vh * (this.ui.full ? 0.4 : 0.75));
                 const dot = Tool.nextDot();
+                let targetScrollY = 0;
                 if (dot) {
                     const anchor = (dot.closest('.topic-post') || dot).getBoundingClientRect();
-                    const target = anchor.top + window.scrollY - window.innerHeight * 0.3;
-                    window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
-                } else {
-                    const vh = window.innerHeight || 800;
-                    const step = Math.floor(vh * (this.ui.full ? 0.4 : 0.75));
-                    window.scrollBy({ top: step, behavior: 'smooth' });
+                    targetScrollY = anchor.top + window.scrollY - window.innerHeight * 0.3;
                 }
-                if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
-                    this.moving = false;
-                    return;
-                }
+                window.scrollTo({ top: Math.max(window.scrollY + minStep, targetScrollY), behavior: 'smooth' });
                 await this.liker.execute(this);
                 const t1 = Date.now();
-                let waited = false;
+                let lastDotsCount = -1;
                 while (this.active && this.moving) {
-                    if (Date.now() - t1 >= 6000) break;
-                    if (Tool.dots().length === 0) break;
-                    if (!waited) { waited = true; console.log(`等待蓝点：剩余 ${Tool.dots().length} 个`); }
+                    const dotsCount = Tool.dots().length;
+                    if (dotsCount === 0 || Date.now() - t1 >= 8000) break;
+                    if (lastDotsCount !== dotsCount) {
+                        lastDotsCount = dotsCount;
+                        console.log(`等待蓝点：剩余 ${dotsCount} 个`);
+                    }
                     if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
                         this.moving = false;
                         return;
@@ -488,11 +473,7 @@
                     bottomStuckCount = 0;
                 }
                 lastScrollY = currentScrollY;
-                if (bottomStuckCount >= 1 && Tool.ready()) {
-                    if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
-                        this.moving = false;
-                        return;
-                    }
+                if (bottomStuckCount >= 2 && Tool.ready() && Tool.bottom()) {
                     await this.finishTopic(id);
                     return;
                 }
@@ -502,11 +483,12 @@
         async forward() {
             if (!this.active) return;
             this.moving = true;
-            const isTopic = Tool.topic();
+            this.currentTopicId = null;
+            this.liker.reset();
             const isList = /^\/(latest|top|new|unread)?$/.test(location.pathname) || location.pathname.startsWith('/latest');
-            if (isTopic || !isList) {
+            if (Tool.topic() || !isList) {
                 this.navigate('/latest');
-                await Tool.wait(Tool.rand(500, 2000), this);
+                await Tool.wait(1000, this);
             }
             let retry = 0;
             while (this.active) {
@@ -523,7 +505,7 @@
                 let targetLink = null;
                 for (const row of items) {
                     const link = row.querySelector('a.title, a.raw-topic-link');
-                    const id = row.getAttribute('data-topic-id') || link?.href?.match(/\/t\/(?:topic\/)?(\d+)/)?.[1];
+                    const id = row.getAttribute('data-topic-id') || Tool.identity(link?.href || '');
                     if (!id) continue;
                     if (this.ui.skip && this.history.includes(String(id))) continue;
                     if (this.ui.maxPosts > 0) {
@@ -542,10 +524,10 @@
                     return;
                 }
                 window.scrollBy({ top: window.innerHeight * 0.85, behavior: 'smooth' });
-                if (!(await Tool.wait(Tool.rand(500, 2000), this))) return;
+                if (!(await Tool.wait(1000, this))) return;
                 if (Tool.bottom()) {
                     this.navigate('/latest');
-                    if (!(await Tool.wait(Tool.rand(500, 2000), this))) return;
+                    await Tool.wait(1000, this);
                 }
             }
             this.moving = false;
@@ -709,7 +691,6 @@
             };
             document.getElementById('lda-cf-btn').onclick = (e) => {
                 e.stopPropagation();
-                console.log('重新加载：完成 CF 验证');
                 location.reload();
             };
             this.executeBtn = document.getElementById('lda-execute');
@@ -905,8 +886,7 @@
     }
     const ui = new UI();
     Interceptor.init(ui);
-    const liker = new Liker(ui);
-    const runner = new Runner(liker, ui);
+    const runner = new Runner(new Liker(ui), ui);
     Interceptor.runner = runner;
     ui.executeBtn.onclick = () => {
         if (runner.active) { runner.stop(); return; }
