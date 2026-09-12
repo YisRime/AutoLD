@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.5.0
+// @version      1.6.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -50,8 +50,7 @@
             const vh = window.innerHeight ||  800;
             const all = Array.from(document.querySelectorAll('.read-state:not(.read)'));
             const pick = all.filter(el => el.getBoundingClientRect().top > vh * 0.25);
-            const arr = pick.length ? pick : all;
-            return arr.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
+            return pick.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
         }
     };
     const Stealth = {
@@ -140,21 +139,6 @@
         execute(id) {
             if (!id || this.tracked.has(String(id))) return;
             this.markTracked(id);
-            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-            const headers = {
-                'Accept': 'application/json, text/javascript, */*; q=0.01',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Discourse-Present': 'true'
-            };
-            if (csrf) headers['X-CSRF-Token'] = csrf;
-            fetch(`/t/${id}.json?track_visit=true`, {
-                method: 'GET',
-                headers: {
-                    ...headers,
-                    'Discourse-Track-View': 'true',
-                    'Discourse-Track-View-Topic-Id': String(id)
-                }
-            }).catch(() => {});
         }
     };
     const Interceptor = {
@@ -325,12 +309,26 @@
         }
         get active() { return sessionStorage.getItem('lda_active') === 'true'; }
         set active(v) { sessionStorage.setItem('lda_active', v); }
-        get queue() { return JSON.parse(sessionStorage.getItem('lda_queue') || '[]'); }
-        set queue(v) { sessionStorage.setItem('lda_queue', JSON.stringify(v)); }
-        get page() { return parseInt(sessionStorage.getItem('lda_page') || '0'); }
-        set page(v) { sessionStorage.setItem('lda_page', v); }
         get count() { return parseInt(sessionStorage.getItem('lda_count') || '0'); }
         set count(v) { sessionStorage.setItem('lda_count', v); }
+        pressKey(key, code, keyCode) {
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            if (win.document.activeElement && win.document.activeElement !== win.document.body) {
+                win.document.activeElement.blur();
+            }
+            const opts = {
+                key: key,
+                code: code,
+                keyCode: keyCode,
+                which: keyCode,
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                view: win
+            };
+            win.document.dispatchEvent(new KeyboardEvent('keydown', opts));
+            win.document.dispatchEvent(new KeyboardEvent('keyup', opts));
+        }
         start() {
             sessionStorage.removeItem('lda_pause_until');
             if (this.ui.keepAlive) Stealth.keepAlive();
@@ -369,7 +367,7 @@
         async finishTopic(id) {
             if (id && !this.history.includes(id)) {
                 this.history.push(id);
-                if (this.history.length > 800) this.history.shift();
+                if (this.history.length > 1024) this.history.shift();
                 GM_setValue('lda_history', this.history);
             }
             this.count++;
@@ -472,39 +470,33 @@
             }
             this.moving = false;
         }
-        async fetch() {
-            const unreadData = await Net.fetch(`/unread.json?page=${this.page}`);
-            let list = unreadData?.topic_list?.topics;
-            if (!Array.isArray(list) || list.length === 0) {
-                return false;
-            }
-            console.log(`获取未读：${list.length} 篇`);
-            if (this.ui.skip) list = list.filter(t => !this.history.includes(t.id.toString()));
-            const maxP = this.ui.maxPosts;
-            if (maxP > 0) list = list.filter(t => (t.posts_count || t.highest_post_number || 0) <= maxP);
-            if (list.length > 0) {
-                this.queue = list;
-                return true;
-            }
-            this.page++;
-            return await this.fetch();
-        }
         async forward() {
             if (!this.active) return;
-            let topics = this.queue;
-            if (this.ui.skip) topics = topics.filter(t => !this.history.includes(t.id.toString()));
-            const maxP = this.ui.maxPosts;
-            if (maxP > 0) topics = topics.filter(t => (t.posts_count || t.highest_post_number || 0) <= maxP);
-            if (topics.length === 0) {
-                if (!(await this.fetch()) || this.queue.length === 0) {
-                    this.stop();
-                    return;
-                }
-                topics = this.queue;
+            if (!location.pathname.startsWith('/latest')) {
+                this.route('/latest');
+                return;
             }
-            const t = topics.shift();
-            this.queue = topics;
-            if (t) this.route(t.last_read_post_number ? `/t/topic/${t.id}/${t.last_read_post_number}` : `/t/topic/${t.id}`);
+            let waitCount = 0;
+            while (this.active && !document.querySelector('.topic-list-item') && waitCount < 20) {
+                if (!(await Tool.wait(500, this))) return;
+                waitCount++;
+            }
+            while (this.active) {
+                this.pressKey('j', 'KeyJ', 74);
+                if (!(await Tool.wait(Tool.rand(1000, 3000), this))) return;
+                const row = document.querySelector('.topic-list-item.selected');
+                if (!row) continue;
+                const id = row.getAttribute('data-topic-id') || row.querySelector('a.title')?.href?.match(/\/t\/(?:topic\/)?(\d+)/)?.[1];
+                if (!id) continue;
+                if (this.ui.skip && this.history.includes(String(id))) continue;
+                if (this.ui.maxPosts > 0) {
+                    const count = parseInt(row.querySelector('.num.posts, .posts-map, .posts')?.innerText?.replace(/\D/g, '') || '0', 10);
+                    if (count > this.ui.maxPosts) continue;
+                }
+                this.pressKey('Enter', 'Enter', 13);
+                this.pressKey('o', 'KeyO', 79);
+                return;
+            }
         }
         route(url) {
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
