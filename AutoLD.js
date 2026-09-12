@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.8.9
+// @version      1.9.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -465,6 +465,10 @@
                         this.moving = false;
                         return;
                     }
+                }
+                if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
+                    this.moving = false;
+                    return;
                 }
                 const currentScrollY = window.scrollY || document.documentElement.scrollTop;
                 if (Tool.bottom() || (lastScrollY === currentScrollY && currentScrollY > 0)) {
