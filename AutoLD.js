@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      2.0.0
+// @version      2.1.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -686,7 +686,38 @@
         }
         getCurrentUsername() {
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-            return win.Discourse?.currentUser?.username || null;
+            return win.Discourse?.__container__?.lookup('service:current-user')?.username
+                || win.Discourse?.currentUser?.username
+                || win.Discourse?.User?.current?.()?.username
+                || document.querySelector('#current-user a, .current-user a')?.getAttribute('data-username')
+                || document.querySelector('#current-user a, .current-user a')?.getAttribute('href')?.match(/\/u\/([^\/]+)/)?.[1]
+                || null;
+        }
+        async getCurrentUser() {
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            let u = win.Discourse?.__container__?.lookup('service:current-user')
+                || win.Discourse?.currentUser
+                || win.Discourse?.User?.current?.();
+            if (u && u.username) return u;
+            try {
+                const preloadedData = document.getElementById('data-preloaded')?.getAttribute('data-preloaded');
+                if (preloadedData) {
+                    const parsed = JSON.parse(preloadedData);
+                    if (parsed.currentUser) return parsed.currentUser;
+                }
+            } catch (_) {}
+            try {
+                const res = await fetch('/session/current.json', {
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data?.current_user) return data.current_user;
+                }
+            } catch (_) {}
+            const username = this.getCurrentUsername();
+            if (username) return { username };
+            return null;
         }
         async fetchConnectDetails() {
             if (!location.hostname.includes('linux.do')) return null;
@@ -694,6 +725,7 @@
                 GM_xmlhttpRequest({
                     method: 'GET',
                     url: 'https://connect.linux.do/',
+                    withCredentials: true,
                     timeout: 10000,
                     onload: (res) => {
                         if (res.status !== 200) return resolve(null);
@@ -735,16 +767,17 @@
             const list = document.getElementById('lda-user-list');
             btn.disabled = true;
             try {
-                const username = this.getCurrentUsername();
+                const me = await this.getCurrentUser();
+                const username = me?.username;
                 if (!username) throw new Error('未登录');
-                const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                const me = win.Discourse?.currentUser || {};
                 const [summaryRes, connectData] = await Promise.all([
-                    fetch(`/u/${username}/summary.json`).then(r => r.ok ? r.json() : null).catch(() => null),
+                    fetch(`/u/${encodeURIComponent(username)}/summary.json`, {
+                        headers: { 'Accept': 'application/json' }
+                    }).then(r => r.ok ? r.json() : null).catch(() => null),
                     this.fetchConnectDetails()
                 ]);
                 const s = summaryRes?.user_summary || {};
-                const trustLevel = me.trust_level ?? s?.trust_level;
+                const trustLevel = me?.trust_level ?? s?.trust_level;
                 const levels = ['Lv0', 'Lv1', 'Lv2', 'Lv3', 'Lv4'];
                 const levelStr = trustLevel !== undefined ? (levels[trustLevel] || `Lv${trustLevel}`) : 'Lv-';
                 const timeMinutes = Math.floor((s.time_read || 0) / 60);
