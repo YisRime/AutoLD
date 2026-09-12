@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      1.9.0
+// @version      2.0.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -41,32 +41,11 @@
             return Math.ceil(scrollTop + (window.innerHeight || doc.clientHeight)) >= scrollHeight - 250;
         },
         ready: () => !document.querySelector('.loading, .infinite-scroll'),
-        topic: () => /\/t\/(?:[^\/]+\/)?\d+/.test(location.pathname),
-        identity: (url = location.href) => {
-            try {
-                const parts = new URL(url, location.origin).pathname.split('/').filter(Boolean);
-                const tIndex = parts.indexOf('t');
-                if (tIndex !== -1) {
-                    for (let i = tIndex + 1; i < parts.length; i++) {
-                        if (/^\d+$/.test(parts[i])) return parts[i];
-                    }
-                }
-            } catch (_) {}
-            return null;
-        },
+        identity: (url = location.href) => url.match(/\/t\/(?:[^\/]+\/)?(\d+)/)?.[1] || null,
+        topic: () => Boolean(Tool.identity()),
         title: () => document.querySelector('#topic-title h1 a, #topic-title .fancy-title')?.innerText?.trim(),
-        dots: () => {
-            const vh = window.innerHeight || 800;
-            return Array.from(document.querySelectorAll('.topic-post .read-state:not(.read)')).filter(el => {
-                const r = el.getBoundingClientRect();
-                return r.top > -50 && r.top < vh + 50;
-            });
-        },
-        nextDot: () => {
-            const vh = window.innerHeight || 800;
-            const pick = Array.from(document.querySelectorAll('.topic-post .read-state:not(.read)')).filter(el => el.getBoundingClientRect().top > vh * 0.25);
-            return pick.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
-        }
+        dots: () => document.querySelectorAll('.read-state:not(.read)'),
+        nextDot: () => document.querySelector('.read-state:not(.read)')
     };
     const Stealth = {
         audioCtx: null,
@@ -133,13 +112,12 @@
             });
         }
     };
-    const trackedTopics = new Set();
     const Interceptor = {
         ui: null,
         runner: null,
         closePopup() {
             setTimeout(() => {
-                const btn = document.querySelector('.dialog-footer .btn-primary, .modal-footer .btn-primary, .d-modal__footer .btn-primary, .bootbox .btn-primary');
+                const btn = document.querySelector('.dialog-footer .btn-primary, .d-modal__footer .btn-primary');
                 if (btn) Stealth.click(btn);
                 else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
             }, Tool.rand(500, 2000));
@@ -172,14 +150,9 @@
             this.ui = ui;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const isLike = (u) => /toggle\.json|custom-reactions|discourse-reactions|post_actions/.test(String(u));
-            const isTrack = (u) => String(u).includes('/pageview') || String(u).includes('track_visit=true');
             const origFetch = win.fetch;
             win.fetch = async (...args) => {
                 const urlStr = String(args[0]?.url || args[0]);
-                if (isTrack(urlStr)) {
-                    const idMatch = Tool.identity(urlStr) || Tool.identity();
-                    if (idMatch) trackedTopics.add(String(idMatch));
-                }
                 const isLikeUrl = isLike(urlStr);
                 let res;
                 try {
@@ -204,10 +177,6 @@
             const origSend = win.XMLHttpRequest.prototype.send;
             win.XMLHttpRequest.prototype.open = function(m, u) { 
                 this._u = u; 
-                if (isTrack(u)) {
-                    const idMatch = Tool.identity(String(u)) || Tool.identity();
-                    if (idMatch) trackedTopics.add(String(idMatch));
-                }
                 return origOpen.apply(this, arguments); 
             };
             win.XMLHttpRequest.prototype.send = function(...args) {
@@ -238,17 +207,12 @@
         }
         cooling() { return GM_getValue('lda_cooldown', 0) > Date.now(); }
         getScore(post) {
-            const c = post.querySelector('.discourse-reactions-counter, .reactions-counter, .like-count');
-            if (c) {
-                const n = parseInt(c.innerText?.trim() || c.textContent?.trim() || '0');
-                if (!isNaN(n)) return n;
-            }
-            const btn = post.querySelector('.discourse-reactions-reaction-button, button.btn-toggle-reaction-like, button.like');
-            return parseInt((btn?.getAttribute('aria-label') || btn?.innerText || '').match(/(\d+)/)?.[1] || '0');
+            const c = post.querySelector('.discourse-reactions-counter');
+            if (!c) return 0;
+            return parseInt(c.innerText?.trim() || c.getAttribute('aria-label') || '0', 10) || 0;
         }
-        isLiked(el) {
-            const btn = el.querySelector('button.btn-toggle-reaction-like, .discourse-reactions-reaction-button button, button.like');
-            return !btn || btn.classList.contains('has-like') || btn.classList.contains('liked') || btn.getAttribute('aria-pressed') === 'true' || !!el.querySelector('.has-like, .my-reaction');
+        isLiked(post) {
+            return !!post.querySelector('.has-used-main-reaction, .my-reaction, .has-like');
         }
         isInViewport(el) {
             const rect = el.getBoundingClientRect();
@@ -270,7 +234,8 @@
                     continue;
                 }
                 if (threshold > 0 && this.getScore(post) < threshold) continue;
-                const btn = post.querySelector('button.btn-toggle-reaction-like, .discourse-reactions-reaction-button button, button.like');
+                
+                const btn = post.querySelector('.can-toggle-reaction button.btn-toggle-reaction-like, .discourse-reactions-reaction-button button');
                 if (!btn) continue;
 
                 this.processedPosts.add(postKey);
@@ -286,7 +251,6 @@
             this.ui = ui;
             this.moving = false;
             this.currentTopicId = null;
-            this.history = GM_getValue('lda_history', []);
             this.url = location.href;
             setInterval(() => {
                 if (this.url !== location.href) {
@@ -304,6 +268,9 @@
                 }
             }, 500);
             if (this.active) {
+                if (!sessionStorage.getItem('lda_start_time')) {
+                    sessionStorage.setItem('lda_start_time', String(Date.now()));
+                }
                 if (this.ui.keepAlive) Stealth.keepAlive();
                 this.ui.status('运行');
                 this.resume();
@@ -313,6 +280,16 @@
         set active(v) { sessionStorage.setItem('lda_active', v); }
         get count() { return parseInt(sessionStorage.getItem('lda_count') || '0'); }
         set count(v) { sessionStorage.setItem('lda_count', v); }
+        checkTimeout() {
+            if (this.ui.duration > 0) {
+                const startTime = parseInt(sessionStorage.getItem('lda_start_time') || '0', 10);
+                if (startTime && Date.now() - startTime >= this.ui.duration * 60 * 1000) {
+                    this.stop(`达到限时 ${this.ui.duration} 分钟`);
+                    return true;
+                }
+            }
+            return false;
+        }
         navigate(url) {
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             try {
@@ -323,6 +300,7 @@
         }
         start() {
             sessionStorage.removeItem('lda_pause_until');
+            sessionStorage.setItem('lda_start_time', String(Date.now()));
             if (this.ui.keepAlive) Stealth.keepAlive();
             this.active = true;
             this.count = 0;
@@ -330,19 +308,21 @@
             this.liker.reset();
             this.resume();
         }
-        stop() {
+        stop(reason = '') {
             this.active = false;
             this.moving = false;
             this.currentTopicId = null;
             this.liker.reset();
             sessionStorage.removeItem('lda_pause_until');
+            sessionStorage.removeItem('lda_start_time');
             this.ui.status('停止');
             Stealth.suspendKeepAlive();
+            if (reason) console.log(`停止：${reason}`);
         }
         pause(sec) {
             if (!this.active) return;
             const ms = sec * 1000;
-            this.stop();
+            this.stop('达到限流');
             sessionStorage.setItem('lda_pause_until', String(Date.now() + ms));
             this.ui.status('暂停');
             setTimeout(() => {
@@ -356,39 +336,34 @@
         }
         async resume() {
             if (!this.active) return;
+            if (this.checkTimeout()) return;
             if (Tool.topic()) await this.browse();
             else await this.forward();
         }
         async finishTopic(id) {
-            const strId = String(id);
-            if (strId && !this.history.includes(strId)) {
-                this.history.push(strId);
-                if (this.history.length > 1024) this.history.shift();
-                GM_setValue('lda_history', this.history);
-            }
             this.count++;
             this.ui.updateReadCount(this.count);
             this.currentTopicId = null;
             this.liker.reset();
             this.moving = false;
             if (this.ui.limit > 0 && this.count >= this.ui.limit) {
-                this.stop();
+                this.stop(`达到限额 ${this.ui.limit} 篇`);
                 return;
             }
+            if (this.checkTimeout()) return;
             await this.forward();
         }
         async browse() {
             if (this.moving) return;
+            if (this.checkTimeout()) return;
             this.moving = true;
             let waitDomCount = 0;
             while (this.active && waitDomCount < 20) {
-                const curId = Tool.identity();
-                if (curId && this.ui.skip && this.history.includes(String(curId))) {
-                    console.log(`跳过已读：${curId}`);
+                if (this.checkTimeout()) {
                     this.moving = false;
-                    await this.forward();
                     return;
                 }
+                const curId = Tool.identity();
                 if (curId && document.querySelector('.topic-post') && Tool.title()) break;
                 if (!(await Tool.wait(500, this))) {
                     this.moving = false;
@@ -402,38 +377,26 @@
                 await this.forward();
                 return;
             }
-            if (this.ui.skip && this.history.includes(String(id))) {
-                console.log(`跳过已读：${id}`);
-                this.moving = false;
-                await this.forward();
-                return;
-            }
             this.currentTopicId = String(id);
             this.liker.reset();
             const maxP = this.ui.maxPosts;
             if (maxP > 0) {
-                let count = 0;
-                const timelineEl = document.querySelector('.timeline-replies');
-                if (timelineEl) {
-                    const match = timelineEl.innerText.match(/\/\s*(\d+)/);
-                    if (match) count = parseInt(match[1], 10);
-                }
-                if (!count) {
-                    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                    count = win.Discourse?.__container__?.lookup('controller:topic')?.model?.posts_count || 0;
-                }
+                const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+                const count = win.Discourse?.__container__?.lookup('controller:topic')?.model?.posts_count || 0;
                 if (count > maxP) {
-                    console.log(`触发过滤：${count} > ${maxP} 楼`);
                     await this.finishTopic(id);
                     return;
                 }
             }
-            trackedTopics.add(String(id));
             console.log(`开始阅读：${Tool.title()}`);
             await this.liker.execute(this);
             let lastScrollY = -1;
             let bottomStuckCount = 0;
             while (this.active && this.moving) {
+                if (this.checkTimeout()) {
+                    this.moving = false;
+                    return;
+                }
                 let tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
                     if (Date.now() - tLoad > 8000) break;
@@ -452,21 +415,20 @@
                 }
                 window.scrollTo({ top: Math.max(window.scrollY + minStep, targetScrollY), behavior: 'smooth' });
                 await this.liker.execute(this);
+
                 const t1 = Date.now();
-                let lastDotsCount = -1;
                 while (this.active && this.moving) {
-                    const dotsCount = Tool.dots().length;
-                    if (dotsCount === 0 || Date.now() - t1 >= 8000) break;
-                    if (lastDotsCount !== dotsCount) {
-                        lastDotsCount = dotsCount;
-                        console.log(`等待蓝点：剩余 ${dotsCount} 个`);
+                    if (this.checkTimeout()) {
+                        this.moving = false;
+                        return;
                     }
-                    if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
+                    if (Tool.dots().length === 0 || Date.now() - t1 >= 8000) break;
+                    if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
                         this.moving = false;
                         return;
                     }
                 }
-                if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
+                if (!(await Tool.wait(Tool.rand(1000, 3000), this))) {
                     this.moving = false;
                     return;
                 }
@@ -486,6 +448,7 @@
         }
         async forward() {
             if (!this.active) return;
+            if (this.checkTimeout()) return;
             this.moving = true;
             this.currentTopicId = null;
             this.liker.reset();
@@ -496,7 +459,12 @@
             }
             let retry = 0;
             while (this.active) {
-                const items = Array.from(document.querySelectorAll('.topic-list-item, tr[data-topic-id]'));
+                if (this.checkTimeout()) {
+                    this.moving = false;
+                    return;
+                }
+                const selector = this.ui.skip ? '.topic-list-item.unseen-topic' : '.topic-list-item';
+                const items = document.querySelectorAll(selector);
                 if (!items.length) {
                     if (!(await Tool.wait(1000, this))) return;
                     retry++;
@@ -509,21 +477,17 @@
                 let targetLink = null;
                 for (const row of items) {
                     const link = row.querySelector('a.title, a.raw-topic-link');
-                    const id = row.getAttribute('data-topic-id') || Tool.identity(link?.href || '');
-                    if (!id) continue;
-                    if (this.ui.skip && this.history.includes(String(id))) continue;
+                    if (!link) continue;
                     if (this.ui.maxPosts > 0) {
-                        const count = parseInt(row.querySelector('.posts-map, .posts, .num.posts')?.textContent?.replace(/\D/g, '') || '0', 10);
+                        const repliesEl = row.querySelector('td.topic-likes-replies-data span.number');
+                        const count = parseInt(repliesEl?.textContent?.trim() || '0', 10);
                         if (count > this.ui.maxPosts) continue;
                     }
-                    if (link) {
-                        targetLink = link;
-                        break;
-                    }
+                    targetLink = link;
+                    break;
                 }
                 if (targetLink) {
                     this.moving = false;
-                    console.log(`进入话题: ${targetLink.innerText?.trim() || targetLink.href}`);
                     Stealth.click(targetLink);
                     return;
                 }
@@ -547,6 +511,7 @@
             this.cooldown();
         }
         get limit() { return parseInt(document.getElementById('lda-limit').value); }
+        get duration() { return parseInt(document.getElementById('lda-duration').value) || 0; }
         get maxPosts() { return parseInt(document.getElementById('lda-maxPosts').value) || 0; }
         get threshold() { return parseInt(document.getElementById('lda-threshold').value); }
         get skip() { return document.getElementById('lda-skip').checked; }
@@ -626,6 +591,7 @@
                         <div class="lda-row" title="自动跳过已经阅读过的话题"><span>跳过已读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-skip"></div></div>
                         <div class="lda-row" title="完整阅读每个话题未读内容"><span>完整阅读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-full"></div></div>
                         <div class="lda-row" title="设置本次阅读话题数量上限"><span>阅读限额</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-limit" min="0"></div></div>
+                        <div class="lda-row" title="设置本次阅读话题时长上限"><span>阅读限时</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-duration" min="0"></div></div>
                         <div class="lda-row" title="阅读总数少于设定值的话题"><span>最大楼层</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-maxPosts" min="0"></div></div>
                         <div class="lda-row" title="自动点赞的赞数阈值 | 点击文字可重置冷却"><span id="lda-threshold-label">点赞阈值</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-threshold" min="-1"></div></div>
                         <details style="width:100%">
@@ -673,7 +639,7 @@
                 e.stopPropagation();
                 this.box.classList.toggle('expanded');
             };
-            [['limit', 0, false], ['maxPosts', 0, false], ['threshold', 0, false], ['skip', true, true], ['full', false, true]].forEach(([k, def, isChk]) => {
+            [['limit', 0, false], ['duration', 0, false], ['maxPosts', 0, false], ['threshold', 0, false], ['skip', true, true], ['full', false, true]].forEach(([k, def, isChk]) => {
                 const el = document.getElementById(`lda-${k}`);
                 if (isChk) {
                     el.checked = GM_getValue(`lda_${k}`, def);
@@ -703,7 +669,6 @@
                 GM_setValue('lda_cooldown', 0);
                 this.cooldown();
                 if (runner.active) this.status('运行');
-                console.log('清除冷却：已清除');
             };
             const bindDetailLoader = (name, loader) => {
                 const detail = document.getElementById(`lda-${name}-info-detail`);
@@ -893,9 +858,9 @@
     const runner = new Runner(new Liker(ui), ui);
     Interceptor.runner = runner;
     ui.executeBtn.onclick = () => {
-        if (runner.active) { runner.stop(); return; }
+        if (runner.active) { runner.stop('停止'); return; }
         const until = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
-        if (until > Date.now()) { runner.stop(); return; }
+        if (until > Date.now()) { runner.stop('停止 - 限流'); return; }
         runner.start();
     };
 })();
