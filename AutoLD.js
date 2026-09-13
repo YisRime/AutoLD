@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      2.4.0
+// @version      2.5.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -46,7 +46,11 @@
         title: () => document.querySelector('#topic-title h1 a, #topic-title .fancy-title')?.innerText?.trim(),
         dots: () => document.querySelectorAll('.read-state:not(.read)'),
         nextDot: () => document.querySelector('.read-state:not(.read)'),
-        isCF: () => document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running, #turnstile-wrapper, iframe[src*="challenges.cloudflare.com"]'))
+        isCF: () => document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running, #turnstile-wrapper, iframe[src*="challenges.cloudflare.com"]')),
+        countText: (el) => {
+            const c = el?.querySelector?.('.post__contents');
+            return c ? (c.innerText || '').replace(/\s+/g, '').length : 0;
+        }
     };
     const Stealth = {
         audioCtx: null,
@@ -279,6 +283,8 @@
             this.moving = false;
             this.currentTopicId = null;
             this.url = location.href;
+            this.readPostKeys = new Set();
+            this.resetPacing();
             setInterval(() => {
                 if (this.url !== location.href) {
                     const prevUrl = this.url;
@@ -290,6 +296,7 @@
                         this.moving = false;
                         this.currentTopicId = null;
                         this.liker.reset();
+                        this.resetPacing();
                         this.resume();
                     }
                 }
@@ -307,6 +314,13 @@
         set active(v) { sessionStorage.setItem('lda_active', v); }
         get count() { return parseInt(sessionStorage.getItem('lda_count') || '0'); }
         set count(v) { sessionStorage.setItem('lda_count', v); }
+        resetPacing() {
+            this.readPostKeys.clear();
+            this.scrollCount = 0;
+            this.textCount = 0;
+            this.targetScrolls = Tool.rand(3, 6);
+            this.targetChars = Tool.rand(160, 320);
+        }
         checkTimeout() {
             if (this.ui.duration > 0) {
                 const startTime = parseInt(sessionStorage.getItem('lda_start_time') || '0', 10);
@@ -340,6 +354,7 @@
             this.count = 0;
             this.ui.status('运行');
             this.liker.reset();
+            this.resetPacing();
             this.resume();
         }
         stop(reason = '') {
@@ -347,6 +362,7 @@
             this.moving = false;
             this.currentTopicId = null;
             this.liker.reset();
+            this.resetPacing();
             sessionStorage.removeItem('lda_pause_until');
             sessionStorage.removeItem('lda_start_time');
             this.ui.status('停止');
@@ -382,6 +398,7 @@
             this.ui.updateReadCount(this.count);
             this.currentTopicId = null;
             this.liker.reset();
+            this.resetPacing();
             this.moving = false;
             if (this.ui.limit > 0 && this.count >= this.ui.limit) {
                 this.stop(`达到限额 ${this.ui.limit} 篇`);
@@ -397,6 +414,7 @@
                 if (!(await this.waitCF())) return;
             }
             this.moving = true;
+            this.resetPacing();
             const tDom = Date.now();
             while (this.active && Date.now() - tDom < 5000) {
                 if (this.checkTimeout()) {
@@ -454,7 +472,29 @@
                 }
                 window.scrollTo({ top: Math.max(window.scrollY + minStep, targetScrollY), behavior: 'smooth' });
                 await this.liker.execute(this);
-
+                this.scrollCount++;
+                let newChars = 0;
+                document.querySelectorAll('.topic-post').forEach(post => {
+                    const rect = post.getBoundingClientRect();
+                    if (rect.top < vh - 40 && rect.bottom > 40) {
+                        const key = post.getAttribute('data-post-id') || post.getAttribute('data-post-number') || post.id;
+                        if (key && !this.readPostKeys.has(key)) {
+                            this.readPostKeys.add(key);
+                            newChars += Tool.countText(post);
+                        }
+                    }
+                });
+                this.textCount += newChars;
+                let delay;
+                if (this.scrollCount >= this.targetScrolls || this.textCount >= this.targetChars) {
+                    delay = Tool.rand(2000, 5000);
+                    this.scrollCount = 0;
+                    this.textCount = 0;
+                    this.targetScrolls = Tool.rand(3, 6);
+                    this.targetChars = Tool.rand(160, 320);
+                } else {
+                    delay = Tool.rand(500, 2000);
+                }
                 const tDot = Date.now();
                 while (this.active && this.moving) {
                     if (this.checkTimeout()) {
@@ -467,7 +507,7 @@
                         return;
                     }
                 }
-                if (!(await Tool.wait(Tool.rand(500, 2000), this))) {
+                if (!(await Tool.wait(delay, this))) {
                     this.moving = false;
                     return;
                 }
@@ -494,6 +534,7 @@
             this.moving = true;
             this.currentTopicId = null;
             this.liker.reset();
+            this.resetPacing();
             const isList = /^\/(latest|top|new|unread)?$/.test(location.pathname) || location.pathname.startsWith('/latest');
             if (Tool.topic() || !isList) {
                 this.navigate('/latest');
