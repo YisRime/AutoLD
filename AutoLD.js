@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      2.7.0
+// @version      2.8.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -45,7 +45,10 @@
         topic: () => Boolean(Tool.identity()),
         title: () => document.querySelector('#topic-title h1 a, #topic-title .fancy-title')?.innerText?.trim(),
         nextDot: () => document.querySelector('.read-state:not(.read)'),
-        isCF: () => document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running, #turnstile-wrapper, .cf-turnstile, iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"]')),
+        isCF: () => {
+            if (document.querySelector('#main-outlet, #topic-title, .topic-list')) return false;
+            return document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running'));
+        },
         scrollBehavior: () => (document.hidden ? 'instant' : 'smooth'),
         countContent: (el) => {
             const c = el?.querySelector?.('.cooked');
@@ -58,11 +61,11 @@
         pokeDiscourse() {
             try {
                 const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                const screenTrack = win.Discourse?.__container__?.lookup?.('service:screen-track');
-                if (screenTrack) {
-                    if (typeof screenTrack.start === 'function') screenTrack.start();
-                    if (typeof screenTrack.scrolled === 'function') screenTrack.scrolled();
-                }
+                const c = win.Discourse?.__container__;
+                if (!c?.lookup?.('controller:topic')?.model?.id) return;
+                const st = c.lookup?.('service:screen-track');
+                st?.start?.();
+                st?.scrolled?.();
             } catch (_) {}
         },
         keepAlive() {
@@ -282,7 +285,7 @@
             this.scrollCount = 0;
             this.textCount = 0;
             this.targetScrolls = Tool.rand(3, 6);
-            this.targetChars = Tool.rand(160, 320);
+            this.targetChars = Tool.rand(512, 1024);
         }
         checkTimeout() {
             if (this.ui.duration > 0) {
@@ -310,6 +313,7 @@
             return !Tool.isCF();
         }
         start() {
+            this.moving = false;
             sessionStorage.removeItem('lda_pause_until');
             sessionStorage.setItem('lda_start_time', String(Date.now()));
             if (this.ui.keepAlive) Stealth.keepAlive();
@@ -402,24 +406,35 @@
             await this.liker.execute(this);
             let lastScrollY = -1;
             let bottomStuckCount = 0;
+            const topicStartTime = Date.now();
+            const topicDuration = Tool.rand(3000, 5000);
             while (this.active && this.moving) {
                 if (this.checkTimeout()) { this.moving = false; return; }
                 if (Tool.isCF() && !(await this.waitCF())) { this.moving = false; return; }
+                if (Date.now() - topicStartTime >= topicDuration) {
+                    await this.finishTopic(id);
+                    return;
+                }
                 const tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
                     if (Date.now() - tLoad >= 5000) break;
+                    if (Date.now() - topicStartTime >= topicDuration) {
+                        await this.finishTopic(id);
+                        return;
+                    }
                     if (!(await Tool.wait(500, this))) { this.moving = false; return; }
                 }
                 const vh = window.innerHeight || 800;
-                const minStep = Math.floor(vh * (this.ui.full ? 0.4 : 0.75));
+                const minStep = Math.floor(vh * 0.75);
                 const dot = Tool.nextDot();
                 let targetScrollY = 0;
                 if (dot) {
                     const anchor = (dot.closest('.topic-post') || dot).getBoundingClientRect();
                     targetScrollY = anchor.top + window.scrollY - window.innerHeight * 0.3;
                 }
+                const maxScroll = Math.max(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) - window.innerHeight);
                 window.scrollTo({
-                    top: Math.max(window.scrollY + minStep, targetScrollY),
+                    top: Math.min(maxScroll, Math.max(window.scrollY + (Tool.bottom() ? 0 : minStep), targetScrollY)),
                     behavior: Tool.scrollBehavior()
                 });
                 await this.liker.execute(this);
@@ -438,21 +453,30 @@
                 this.textCount += newChars;
                 let delay;
                 if (this.scrollCount >= this.targetScrolls || this.textCount >= this.targetChars) {
-                    delay = Tool.rand(2000, 5000);
+                    delay = Tool.rand(500, 5000);
                     this.scrollCount = 0;
                     this.textCount = 0;
                     this.targetScrolls = Tool.rand(3, 6);
-                    this.targetChars = Tool.rand(160, 320);
+                    this.targetChars = Tool.rand(512, 1024);
                 } else {
                     delay = Tool.rand(500, 2000);
                 }
                 const tDot = Date.now();
                 while (this.active && this.moving) {
                     if (this.checkTimeout()) { this.moving = false; return; }
+                    if (Date.now() - topicStartTime >= topicDuration) {
+                        await this.finishTopic(id);
+                        return;
+                    }
                     if (!Tool.nextDot() || Date.now() - tDot >= 5000) break;
                     if (!(await Tool.wait(500, this))) { this.moving = false; return; }
                 }
-                if (!(await Tool.wait(delay, this))) { this.moving = false; return; }
+                const waitTime = Math.min(delay, Math.max(0, topicDuration - (Date.now() - topicStartTime)));
+                if (waitTime > 0 && !(await Tool.wait(waitTime, this))) { this.moving = false; return; }
+                if (Date.now() - topicStartTime >= topicDuration) {
+                    await this.finishTopic(id);
+                    return;
+                }
                 const currentScrollY = window.scrollY || document.documentElement.scrollTop;
                 if (Tool.bottom() || (lastScrollY === currentScrollY && currentScrollY > 0)) {
                     bottomStuckCount++;
@@ -461,6 +485,10 @@
                 }
                 lastScrollY = currentScrollY;
                 if (bottomStuckCount >= 2 && Tool.ready() && Tool.bottom()) {
+                    const remaining = topicDuration - (Date.now() - topicStartTime);
+                    if (remaining > 0) {
+                        if (!(await Tool.wait(remaining, this))) { this.moving = false; return; }
+                    }
                     await this.finishTopic(id);
                     return;
                 }
@@ -676,7 +704,7 @@
                 e.stopPropagation();
                 this.box.classList.toggle('expanded');
             };
-            [['limit', 0, false], ['duration', 0, false], ['maxPosts', 0, false], ['threshold', 0, false], ['skip', true, true], ['full', false, true]].forEach(([k, def, isChk]) => {
+            [['limit', 0, false], ['duration', 0, false], ['maxPosts', 128, false], ['threshold', 5, false], ['skip', true, true], ['full', false, true]].forEach(([k, def, isChk]) => {
                 const el = document.getElementById(`lda-${k}`);
                 if (isChk) {
                     el.checked = GM_getValue(`lda_${k}`, def);
@@ -687,7 +715,7 @@
                 }
             });
             const keepaliveEl = document.getElementById('lda-keepalive');
-            keepaliveEl.checked = GM_getValue('lda_keepalive', false);
+            keepaliveEl.checked = GM_getValue('lda_keepalive', true);
             keepaliveEl.onchange = e => {
                 GM_setValue('lda_keepalive', e.target.checked);
                 if (e.target.checked) {
