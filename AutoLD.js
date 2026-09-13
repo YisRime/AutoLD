@@ -7,6 +7,7 @@
 // @supportURL   https://github.com/YisRime/AutoLD/issues
 // @match        https://linux.do/*
 // @match        https://idcflare.com/*
+// @match        https://challenges.cloudflare.com/*
 // @icon         https://www.google.com/s2/favicons?domain=linux.do
 // @grant        GM_addStyle
 // @grant        GM_setValue
@@ -21,6 +22,23 @@
 // ==/UserScript==
 (function () {
     'use strict';
+    if (location.host === 'challenges.cloudflare.com') {
+        const solve = () => {
+            const box = document.querySelector('input[type="checkbox"], .ctp-checkbox-label, #challenge-stage input');
+            if (box) {
+                box.click();
+                return true;
+            }
+            return false;
+        };
+        if (!solve()) {
+            const obs = new MutationObserver(() => {
+                if (solve()) obs.disconnect();
+            });
+            obs.observe(document.documentElement, { childList: true, subtree: true });
+        }
+        return;
+    }
     if (window.__ldaBooted) return;
     window.__ldaBooted = true;
     const Tool = {
@@ -45,7 +63,8 @@
         topic: () => Boolean(Tool.identity()),
         title: () => document.querySelector('#topic-title h1 a, #topic-title .fancy-title')?.innerText?.trim(),
         dots: () => document.querySelectorAll('.read-state:not(.read)'),
-        nextDot: () => document.querySelector('.read-state:not(.read)')
+        nextDot: () => document.querySelector('.read-state:not(.read)'),
+        isCF: () => document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running, #turnstile-wrapper, iframe[src*="challenges.cloudflare.com"]'))
     };
     const Stealth = {
         audioCtx: null,
@@ -55,12 +74,25 @@
             this.injected = true;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const doc = win.document;
+            const toNative = (fn, name) => {
+                try {
+                    Object.defineProperty(fn, 'name', { value: name, configurable: true });
+                    Object.defineProperty(fn, 'toString', {
+                        value: () => `function ${name}() { [native code] }`,
+                        configurable: true
+                    });
+                } catch (_) {}
+                return fn;
+            };
             try {
-                Object.defineProperty(doc, 'hidden', { get: () => false, configurable: true });
-                Object.defineProperty(doc, 'visibilityState', { get: () => 'visible', configurable: true });
-                Object.defineProperty(doc, 'webkitVisibilityState', { get: () => 'visible', configurable: true });
-                win.hasFocus = () => true;
-                doc.hasFocus = () => true;
+                const docProto = win.Document?.prototype || Object.getPrototypeOf(doc);
+                Object.defineProperty(docProto, 'hidden', { get: () => false, configurable: true });
+                Object.defineProperty(docProto, 'visibilityState', { get: () => 'visible', configurable: true });
+                Object.defineProperty(docProto, 'webkitVisibilityState', { get: () => 'visible', configurable: true });
+                const fakeHasFocus = toNative(() => true, 'hasFocus');
+                docProto.hasFocus = fakeHasFocus;
+                win.hasFocus = fakeHasFocus;
+                doc.hasFocus = fakeHasFocus;
             } catch (_) {}
             ['visibilitychange', 'webkitvisibilitychange', 'blur', 'focusout', 'mouseleave'].forEach(evtName => {
                 win.addEventListener(evtName, e => e.stopImmediatePropagation(), true);
@@ -123,6 +155,10 @@
             }, Tool.rand(500, 2000));
         },
         pause(res, isLike = false, data = null) {
+            if (res?.status === 403 && !data) {
+                setTimeout(() => { if (!Tool.isCF()) location.reload(); }, Tool.rand(1000, 3000));
+                return;
+            }
             let sec = 0;
             const retryAfter = res?.headers?.get?.('Retry-After') || res?.getResponseHeader?.('Retry-After');
             if (retryAfter) {
@@ -337,6 +373,11 @@
         async resume() {
             if (!this.active) return;
             if (this.checkTimeout()) return;
+            if (Tool.isCF()) {
+                await Tool.wait(3000, this);
+                if (this.active) this.resume();
+                return;
+            }
             if (Tool.topic()) await this.browse();
             else await this.forward();
         }
@@ -356,6 +397,10 @@
         async browse() {
             if (this.moving) return;
             if (this.checkTimeout()) return;
+            if (Tool.isCF()) {
+                await Tool.wait(3000, this);
+                return;
+            }
             this.moving = true;
             let waitDomCount = 0;
             while (this.active && waitDomCount < 20) {
@@ -449,6 +494,10 @@
         async forward() {
             if (!this.active) return;
             if (this.checkTimeout()) return;
+            if (Tool.isCF()) {
+                await Tool.wait(3000, this);
+                return;
+            }
             this.moving = true;
             this.currentTopicId = null;
             this.liker.reset();
