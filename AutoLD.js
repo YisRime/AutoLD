@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      2.3.0
+// @version      2.4.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -138,7 +138,13 @@
         },
         pause(res, isLike = false, data = null) {
             if (res?.status === 403 && !data) {
-                setTimeout(() => { if (!Tool.isCF()) location.reload(); }, Tool.rand(1000, 3000));
+                const t403 = Date.now();
+                const timer403 = setInterval(() => {
+                    if (Date.now() - t403 >= 5000) {
+                        clearInterval(timer403);
+                        if (!Tool.isCF()) location.reload();
+                    }
+                }, 500);
                 return;
             }
             let sec = 0;
@@ -287,7 +293,7 @@
                         this.resume();
                     }
                 }
-            }, 500);
+            }, 1000);
             if (this.active) {
                 if (!sessionStorage.getItem('lda_start_time')) {
                     sessionStorage.setItem('lda_start_time', String(Date.now()));
@@ -318,6 +324,13 @@
                 if (router) { router.transitionTo(url); return; }
             } catch (_) {}
             location.href = url;
+        }
+        async waitCF() {
+            const start = Date.now();
+            while (this.active && Tool.isCF() && Date.now() - start < 5000) {
+                if (!(await Tool.wait(500, this))) return false;
+            }
+            return !Tool.isCF();
         }
         start() {
             sessionStorage.removeItem('lda_pause_until');
@@ -359,9 +372,7 @@
             if (!this.active) return;
             if (this.checkTimeout()) return;
             if (Tool.isCF()) {
-                await Tool.wait(3000, this);
-                if (this.active) this.resume();
-                return;
+                if (!(await this.waitCF())) return;
             }
             if (Tool.topic()) await this.browse();
             else await this.forward();
@@ -383,12 +394,11 @@
             if (this.moving) return;
             if (this.checkTimeout()) return;
             if (Tool.isCF()) {
-                await Tool.wait(3000, this);
-                return;
+                if (!(await this.waitCF())) return;
             }
             this.moving = true;
-            let waitDomCount = 0;
-            while (this.active && waitDomCount < 20) {
+            const tDom = Date.now();
+            while (this.active && Date.now() - tDom < 5000) {
                 if (this.checkTimeout()) {
                     this.moving = false;
                     return;
@@ -399,7 +409,6 @@
                     this.moving = false;
                     return;
                 }
-                waitDomCount++;
             }
             const id = Tool.identity();
             if (!id) {
@@ -427,9 +436,9 @@
                     this.moving = false;
                     return;
                 }
-                let tLoad = Date.now();
+                const tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
-                    if (Date.now() - tLoad > 10000) break;
+                    if (Date.now() - tLoad >= 5000) break;
                     if (!(await Tool.wait(500, this))) {
                         this.moving = false;
                         return;
@@ -446,14 +455,14 @@
                 window.scrollTo({ top: Math.max(window.scrollY + minStep, targetScrollY), behavior: 'smooth' });
                 await this.liker.execute(this);
 
-                const t1 = Date.now();
+                const tDot = Date.now();
                 while (this.active && this.moving) {
                     if (this.checkTimeout()) {
                         this.moving = false;
                         return;
                     }
-                    if (Tool.dots().length === 0 || Date.now() - t1 >= 10000) break;
-                    if (!(await Tool.wait(1000, this))) {
+                    if (Tool.dots().length === 0 || Date.now() - tDot >= 5000) break;
+                    if (!(await Tool.wait(500, this))) {
                         this.moving = false;
                         return;
                     }
@@ -480,8 +489,7 @@
             if (!this.active) return;
             if (this.checkTimeout()) return;
             if (Tool.isCF()) {
-                await Tool.wait(3000, this);
-                return;
+                if (!(await this.waitCF())) return;
             }
             this.moving = true;
             this.currentTopicId = null;
@@ -489,7 +497,11 @@
             const isList = /^\/(latest|top|new|unread)?$/.test(location.pathname) || location.pathname.startsWith('/latest');
             if (Tool.topic() || !isList) {
                 this.navigate('/latest');
-                await Tool.wait(1000, this);
+                const tNav = Date.now();
+                while (this.active && Date.now() - tNav < 5000) {
+                    if (document.querySelector('.topic-list-item')) break;
+                    if (!(await Tool.wait(500, this))) return;
+                }
             }
             let retry = 0;
             while (this.active) {
@@ -500,9 +512,9 @@
                 const selector = this.ui.skip ? '.topic-list-item.unseen-topic' : '.topic-list-item';
                 const items = document.querySelectorAll(selector);
                 if (!items.length) {
-                    if (!(await Tool.wait(1000, this))) return;
+                    if (!(await Tool.wait(500, this))) return;
                     retry++;
-                    if (retry > 10) {
+                    if (retry >= 10) {
                         this.navigate('/latest');
                         retry = 0;
                     }
@@ -525,11 +537,20 @@
                     Stealth.click(targetLink);
                     return;
                 }
+                const prevCount = items.length;
                 window.scrollBy({ top: window.innerHeight * 0.85, behavior: 'smooth' });
-                if (!(await Tool.wait(1000, this))) return;
+                const tScroll = Date.now();
+                while (this.active && Date.now() - tScroll < 5000) {
+                    if (!(await Tool.wait(500, this))) return;
+                    if (document.querySelectorAll(selector).length > prevCount || Tool.bottom()) break;
+                }
                 if (Tool.bottom()) {
                     this.navigate('/latest');
-                    await Tool.wait(1000, this);
+                    const tNav = Date.now();
+                    while (this.active && Date.now() - tNav < 5000) {
+                        if (document.querySelector('.topic-list-item')) break;
+                        if (!(await Tool.wait(500, this))) return;
+                    }
                 }
             }
             this.moving = false;
