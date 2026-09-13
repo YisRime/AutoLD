@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      2.5.0
+// @version      2.6.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -46,7 +46,7 @@
         title: () => document.querySelector('#topic-title h1 a, #topic-title .fancy-title')?.innerText?.trim(),
         dots: () => document.querySelectorAll('.read-state:not(.read)'),
         nextDot: () => document.querySelector('.read-state:not(.read)'),
-        isCF: () => document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running, #turnstile-wrapper, iframe[src*="challenges.cloudflare.com"]')),
+        isCF: () => document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running, #turnstile-wrapper, .cf-turnstile, iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"]')),
         countText: (el) => {
             const c = el?.querySelector?.('.post__contents');
             return c ? (c.innerText || '').replace(/\s+/g, '').length : 0;
@@ -203,6 +203,12 @@
                 }
                 return res;
             };
+            try {
+                Object.defineProperty(win.fetch, 'toString', {
+                    value: () => origFetch.toString(),
+                    configurable: true
+                });
+            } catch (_) {}
             const origOpen = win.XMLHttpRequest.prototype.open;
             const origSend = win.XMLHttpRequest.prototype.send;
             win.XMLHttpRequest.prototype.open = function(m, u) { 
@@ -226,6 +232,16 @@
                 });
                 return origSend.apply(this, args);
             };
+            try {
+                Object.defineProperty(win.XMLHttpRequest.prototype.open, 'toString', {
+                    value: () => origOpen.toString(),
+                    configurable: true
+                });
+                Object.defineProperty(win.XMLHttpRequest.prototype.send, 'toString', {
+                    value: () => origSend.toString(),
+                    configurable: true
+                });
+            } catch (_) {}
         }
     };
     class Liker {
@@ -341,7 +357,7 @@
         }
         async waitCF() {
             const start = Date.now();
-            while (this.active && Tool.isCF() && Date.now() - start < 5000) {
+            while (this.active && Tool.isCF() && Date.now() - start < 10000) {
                 if (!(await Tool.wait(500, this))) return false;
             }
             return !Tool.isCF();
@@ -454,6 +470,12 @@
                     this.moving = false;
                     return;
                 }
+                if (Tool.isCF()) {
+                    if (!(await this.waitCF())) {
+                        this.moving = false;
+                        return;
+                    }
+                }
                 const tLoad = Date.now();
                 while (this.active && this.moving && !Tool.ready()) {
                     if (Date.now() - tLoad >= 5000) break;
@@ -549,6 +571,12 @@
                 if (this.checkTimeout()) {
                     this.moving = false;
                     return;
+                }
+                if (Tool.isCF()) {
+                    if (!(await this.waitCF())) {
+                        this.moving = false;
+                        return;
+                    }
                 }
                 const selector = this.ui.skip ? '.topic-list-item.unseen-topic' : '.topic-list-item';
                 const items = document.querySelectorAll(selector);
@@ -746,7 +774,7 @@
                 }
             });
             const keepaliveEl = document.getElementById('lda-keepalive');
-            keepaliveEl.checked = GM_getValue('lda_keepalive', true);
+            keepaliveEl.checked = GM_getValue('lda_keepalive', false);
             keepaliveEl.onchange = e => {
                 GM_setValue('lda_keepalive', e.target.checked);
                 if (e.target.checked) {
@@ -757,7 +785,35 @@
             };
             document.getElementById('lda-cf-btn').onclick = (e) => {
                 e.stopPropagation();
-                location.reload();
+                const wasRunning = runner.active;
+                if (wasRunning) {
+                    runner.stop('等待 CF 验证');
+                    this.status('暂停');
+                }
+                const cfBtn = document.getElementById('lda-cf-btn');
+                cfBtn.disabled = true;
+                cfBtn.innerText = '验证中';
+                const w = 480;
+                const h = 600;
+                const left = (window.screen.width - w) / 2;
+                const top = (window.screen.height - h) / 2;
+                const challengeWin = window.open(
+                    'https://linux.do/challenge',
+                    'cf_challenge_window',
+                    `width=${w},height=${h},top=${top},left=${left},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
+                );
+                const timer = setInterval(() => {
+                    if (!challengeWin || challengeWin.closed) {
+                        clearInterval(timer);
+                        cfBtn.disabled = false;
+                        cfBtn.innerText = '验证';
+                        if (wasRunning) {
+                            setTimeout(() => {
+                                runner.start();
+                            }, 1000);
+                        }
+                    }
+                }, 500);
             };
             this.executeBtn = document.getElementById('lda-execute');
             document.getElementById('lda-threshold-label').onclick = (e) => {
