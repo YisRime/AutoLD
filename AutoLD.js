@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      2.9.0
+// @version      3.0.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -25,705 +25,392 @@
     window.__ldaBooted = true;
 
     const Logger = {
-        el: null,
-        init(el) {
-            this.el = el;
-            this.render();
-        },
-        getLogs() {
-            try {
-                return JSON.parse(sessionStorage.getItem('lda_logs') || '[]');
-            } catch (_) {
-                return [];
+        element: null,
+        setup(element) { this.element = element; this.draw(); },
+        retrieve: () => { try { return JSON.parse(sessionStorage.getItem('lda_logs') || '[]'); } catch { return []; } },
+        write(message) {
+            const entry = { time: new Date().toTimeString().split(' ')[0], text: String(message) };
+            const history = this.retrieve();
+            if (history.push(entry) > 80) history.shift();
+            try { sessionStorage.setItem('lda_logs', JSON.stringify(history)); } catch {}
+            if (this.element) {
+                this.element.insertAdjacentHTML('beforeend', `<div class="lda-log-line"><span class="lda-log-time">[${entry.time}]</span><span class="lda-log-text">${entry.text}</span></div>`);
+                this.element.scrollTop = this.element.scrollHeight;
             }
         },
-        createLine(item) {
-            const line = document.createElement('div');
-            line.className = 'lda-log-line';
-            line.innerHTML = `<span class="lda-log-time">[${item.time}]</span><span class="lda-log-text">${item.text}</span>`;
-            return line;
+        draw() {
+            if (!this.element) return;
+            this.element.innerHTML = this.retrieve().map(entry => `<div class="lda-log-line"><span class="lda-log-time">[${entry.time}]</span><span class="lda-log-text">${entry.text}</span></div>`).join('');
+            this.element.scrollTop = this.element.scrollHeight;
         },
-        log(msg) {
-            const time = new Date().toTimeString().split(' ')[0];
-            const item = { time, text: String(msg) };
-            const logs = this.getLogs();
-            logs.push(item);
-            if (logs.length > 80) logs.shift();
-            try {
-                sessionStorage.setItem('lda_logs', JSON.stringify(logs));
-            } catch (_) {}
-            this.append(item);
-        },
-        append(item) {
-            if (!this.el) return;
-            this.el.querySelector('.lda-empty-tip')?.remove();
-            this.el.appendChild(this.createLine(item));
-            this.el.scrollTop = this.el.scrollHeight;
-        },
-        render() {
-            if (!this.el) return;
-            const logs = this.getLogs();
-            this.el.innerHTML = logs.length ? '' : '<div class="lda-empty-tip">暂无日志</div>';
-            logs.forEach(item => this.el.appendChild(this.createLine(item)));
-            this.el.scrollTop = this.el.scrollHeight;
-        },
-        clear() {
-            sessionStorage.removeItem('lda_logs');
-            if (this.el) this.el.innerHTML = '<div class="lda-empty-tip">暂无日志</div>';
-        }
+        clear() { sessionStorage.removeItem('lda_logs'); if (this.element) this.element.innerHTML = ''; }
     };
 
     const Tool = {
-        wait: async (ms, r) => {
-            const target = ms ?? Tool.rand(500, 2000), start = Date.now();
+        random: (minimum, maximum) => Math.floor(Math.random() * (maximum - minimum + 1)) + minimum,
+        wait: async (milliseconds, runner) => {
+            const target = milliseconds ?? Tool.random(500, 2000), start = Date.now();
             while (Date.now() - start < target) {
-                if (r && !r.active) return false;
-                await new Promise(res => setTimeout(res, Math.min(500, target - (Date.now() - start))));
+                if (runner && !runner.active) return false;
+                await new Promise(resolve => setTimeout(resolve, Math.min(500, target - (Date.now() - start))));
             }
             return true;
         },
-        rand: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
-        bottom: () => {
-            const doc = document.documentElement;
-            const scrollHeight = Math.max(document.body.scrollHeight, doc.scrollHeight);
-            const scrollTop = window.scrollY || doc.scrollTop || 0;
-            return Math.ceil(scrollTop + (window.innerHeight || doc.clientHeight)) >= scrollHeight - 250;
+        poll: async (condition, timeout = 5000, step = 500) => {
+            const start = Date.now();
+            while (Date.now() - start < timeout) {
+                const response = condition();
+                if (response) return response;
+                await new Promise(resolve => setTimeout(resolve, step));
+            }
+            return null;
         },
+        bottom: () => Math.ceil((window.scrollY || document.documentElement.scrollTop) + (window.innerHeight || document.documentElement.clientHeight)) >= Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) - 250,
         ready: () => !document.querySelector('.loading, .infinite-scroll'),
-        identity: (url = location.href) => url.match(/\/t\/(?:[^\/]+\/)?(\d+)/)?.[1] || null,
-        topic: () => Boolean(Tool.identity()),
+        identity: (address = location.href) => address.match(/\/t\/.*?\/(\d+)/)?.[1] || null,
         title: () => document.querySelector('#topic-title h1 a, #topic-title .fancy-title')?.innerText?.trim(),
-        nextDot: () => document.querySelector('.read-state:not(.read)'),
-        isCF: () => {
-            if (document.querySelector('#main-outlet, #topic-title, .topic-list')) return false;
-            return document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running'));
-        },
-        scrollBehavior: () => (document.hidden ? 'instant' : 'smooth'),
-        countContent: (el) => {
-            const c = el?.querySelector?.('.cooked');
-            return c ? (c.textContent?.length || 0) + (c.querySelectorAll('img, video, iframe').length * 80) : 0;
+        unread: () => document.querySelector('.read-state:not(.read)'),
+        cloudflare: () => !document.querySelector('#main-outlet, #topic-title, .topic-list') && (document.title.includes('Just a moment...') || Boolean(document.querySelector('#challenge-stage, #challenge-running'))),
+        measure: (element) => { const content = element?.querySelector?.('.cooked'); return content ? (content.textContent?.length || 0) + (content.querySelectorAll('img, video, iframe').length * 80) : 0; },
+        parse: (string) => {
+            const number = parseFloat(String(string || '').trim().toLowerCase());
+            if (isNaN(number)) return 0;
+            return string.toLowerCase().endsWith('k') ? Math.round(number * 1000) : (string.toLowerCase().endsWith('w') ? Math.round(number * 10000) : Math.round(number));
         }
     };
 
     const Stealth = {
-        audioCtx: null,
-        heartbeatTimer: null,
-        pokeDiscourse() {
+        audio: null, timer: null,
+        poke() {
             try {
-                if (!Tool.topic()) return;
-                const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                const c = win.Discourse?.__container__;
-                const topicId = Number(c?.lookup?.('controller:topic')?.model?.id || Tool.identity());
-                if (!topicId || isNaN(topicId) || topicId <= 0) return;
-                const st = c?.lookup?.('service:screen-track');
-                st?.start?.();
-                st?.scrolled?.();
-            } catch (_) {}
+                const expected = Tool.identity(), context = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+                if (!expected) return;
+                const topic = context.Discourse?.__container__?.lookup?.('controller:topic')?.model;
+                if (!topic?.id || String(topic.id) !== String(expected)) return;
+                const tracker = context.Discourse.__container__.lookup('service:screen-track');
+                if (tracker && tracker.topicId !== Number(topic.id)) tracker.start?.(Number(topic.id), topic);
+                tracker?.scrolled?.();
+            } catch {}
         },
-        keepAlive() {
+        keep() {
             try {
-                if (!this.audioCtx) {
-                    const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    if (AudioContext) {
-                        this.audioCtx = new AudioContext();
-                        const osc = this.audioCtx.createOscillator();
-                        const gain = this.audioCtx.createGain();
-                        gain.gain.value = 0.00001;
-                        osc.connect(gain);
-                        gain.connect(this.audioCtx.destination);
-                        osc.start();
-                    }
+                if (!this.audio && (window.AudioContext || window.webkitAudioContext)) {
+                    this.audio = new (window.AudioContext || window.webkitAudioContext)();
+                    const oscillator = this.audio.createOscillator(), gain = this.audio.createGain();
+                    gain.gain.value = 0.00001; oscillator.connect(gain); gain.connect(this.audio.destination); oscillator.start();
                 }
-                if (this.audioCtx?.state === 'suspended') this.audioCtx.resume();
-            } catch (_) {}
-            if (!this.heartbeatTimer) {
-                this.pokeDiscourse();
-                this.heartbeatTimer = setInterval(() => this.pokeDiscourse(), 30000);
-            }
+                if (this.audio?.state === 'suspended') this.audio.resume();
+            } catch {}
+            if (!this.timer) { this.poke(); this.timer = setInterval(() => this.poke(), 30000); }
         },
-        suspendKeepAlive() {
-            try {
-                if (this.audioCtx?.state === 'running') this.audioCtx.suspend();
-            } catch (_) {}
-            if (this.heartbeatTimer) {
-                clearInterval(this.heartbeatTimer);
-                this.heartbeatTimer = null;
-            }
-        },
-        click(el) { el?.click(); }
+        suspend() {
+            try { if (this.audio?.state === 'running') this.audio.suspend(); } catch {}
+            if (this.timer) { clearInterval(this.timer); this.timer = null; }
+        }
     };
 
     const Interceptor = {
-        ui: null,
-        runner: null,
-        closePopup() {
+        view: null, runner: null,
+        close() {
             setTimeout(() => {
-                const btn = document.querySelector('.dialog-footer .btn-primary, .d-modal__footer .btn-primary');
-                if (btn) Stealth.click(btn);
-                else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-            }, Tool.rand(500, 2000));
+                const button = document.querySelector('.dialog-footer .btn-primary, .d-modal__footer .btn-primary');
+                if (button) button.click(); else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+            }, Tool.random(500, 2000));
         },
-        getRetrySec(res, data) {
-            const retryAfter = res?.headers?.get?.('Retry-After') || res?.getResponseHeader?.('Retry-After');
-            if (retryAfter) {
-                const n = parseInt(retryAfter, 10);
-                if (n > 0) return n;
-            }
-            if (data?.extras?.wait_seconds) {
-                const n = parseInt(data.extras.wait_seconds, 10);
-                if (n > 0) return n;
-            }
-            return 0;
+        handle(method, address, status, response = null, data = null, reaction = false) {
+            Logger.write(`接口报错：${(method || 'GET').toUpperCase()} ${String(address).replace(location.origin, '').split('?')[0]} ${status || 'ERR'}`);
+            let seconds = parseInt(response?.headers?.get?.('Retry-After') || data?.extras?.wait_seconds, 10) || 0;
+            if (!seconds) seconds = 300;
+            if (reaction) { GM_setValue('lda_cooldown', Date.now() + seconds * 1000); this.view?.cooldown(); this.close(); }
+            this.runner?.pause(seconds);
         },
-        handleError(url, status, res = null, data = null, isLike = false) {
-            const errDetail = data?.errors?.join?.(', ') || data?.error_type || (typeof data === 'string' ? data : '');
-            const urlShort = String(url).replace(location.origin, '').split('?')[0];
-            Logger.log(`接口报错 [${status || 'ERR'}]: ${urlShort}${errDetail ? ` (${errDetail})` : ''}`);
-            let sec = this.getRetrySec(res, data);
-            if (!sec) sec = isLike ? 86400 : 300;
-            if (isLike) {
-                GM_setValue('lda_cooldown', Date.now() + sec * 1000);
-                this.ui?.cooldown();
-                this.closePopup();
-            }
-            this.runner?.pause(sec);
-        },
-        init(ui) {
-            this.ui = ui;
-            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-            const isLike = (u) => /toggle\.json|custom-reactions|discourse-reactions|post_actions/.test(String(u));
-            const isCF = (u) => /challenges\.cloudflare\.com|cdn-cgi\/challenge-platform|turnstile/.test(String(u));
-            const origFetch = win.fetch;
-            win.fetch = async function (...args) {
-                const urlStr = String(args[0]?.url || args[0]);
-                if (isCF(urlStr)) return origFetch.apply(this, args);
-                const isLikeUrl = isLike(urlStr);
-                let res;
-                try {
-                    res = await origFetch.apply(this, args);
-                } catch (e) {
-                    Interceptor.handleError(urlStr, 0, null, e.message || '网络异常', isLikeUrl);
-                    throw e;
+        setup(view) {
+            this.view = view;
+            const context = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window, original = context.fetch;
+            context.fetch = async function (...parameters) {
+                const address = String(parameters[0]?.url || parameters[0]);
+                if (/challenges\.cloudflare\.com|cdn-cgi\/challenge-platform|turnstile/.test(address)) return original.apply(this, parameters);
+                const method = String(parameters[1]?.method || parameters[0]?.method || 'GET').toUpperCase(), reaction = /toggle\.json|custom-reactions|discourse-reactions|post_actions/.test(address);
+                let response;
+                try { response = await original.apply(this, parameters); } catch (error) { Interceptor.handle(method, address, 0, null, null, reaction); throw error; }
+                if (!response.ok) {
+                    let data = null; try { data = await response.clone().json(); } catch {}
+                    Interceptor.handle(method, address, response.status, response, data, reaction);
+                } else if (reaction) {
+                    try { const data = await response.clone().json(); if (data?.error_type || data?.errors) Interceptor.handle(method, address, response.status, response, data, true); } catch {}
                 }
-                if (!res.ok) {
-                    let d = null;
-                    try { d = await res.clone().json(); } catch (_) {}
-                    Interceptor.handleError(urlStr, res.status, res, d, isLikeUrl);
-                } else if (isLikeUrl) {
-                    try {
-                        const d = await res.clone().json();
-                        if (d?.error_type || d?.errors) {
-                            Interceptor.handleError(urlStr, res.status, res, d, true);
-                        }
-                    } catch (_) {}
-                }
-                return res;
-            };
-            const origOpen = win.XMLHttpRequest.prototype.open;
-            const origSend = win.XMLHttpRequest.prototype.send;
-            win.XMLHttpRequest.prototype.open = function (m, u) {
-                this._u = u;
-                return origOpen.apply(this, arguments);
-            };
-            win.XMLHttpRequest.prototype.send = function (...args) {
-                if (isCF(this._u)) return origSend.apply(this, args);
-                const u = this._u;
-                this.addEventListener('load', function () {
-                    const isLikeUrl = isLike(u);
-                    if (this.status >= 400) {
-                        let d = null;
-                        try { d = JSON.parse(this.responseText); } catch (_) {}
-                        Interceptor.handleError(u, this.status, this, d, isLikeUrl);
-                    } else if (isLikeUrl) {
-                        let d = null;
-                        try { d = JSON.parse(this.responseText); } catch (_) {}
-                        if (d?.error_type || d?.errors) {
-                            Interceptor.handleError(u, this.status, this, d, true);
-                        }
-                    }
-                });
-                this.addEventListener('error', function () {
-                    Interceptor.handleError(u, 0, this, '网络异常', isLike(u));
-                });
-                return origSend.apply(this, args);
+                return response;
             };
         }
     };
 
     class Liker {
-        constructor(ui) {
-            this.ui = ui;
-            this.processedPosts = new Set();
-        }
-        reset() { this.processedPosts.clear(); }
+        constructor(view) { this.view = view; this.history = new Set(); }
+        reset() { this.history.clear(); }
         cooling() { return GM_getValue('lda_cooldown', 0) > Date.now(); }
-        getScore(post) {
-            const c = post.querySelector('.discourse-reactions-counter');
-            if (!c) return 0;
-            return parseInt(c.innerText?.trim() || c.getAttribute('aria-label') || '0', 10) || 0;
-        }
-        isLiked(post) {
-            return !!post.querySelector('.has-used-main-reaction, .my-reaction, .has-like');
-        }
-        isInViewport(el) {
-            const rect = el.getBoundingClientRect();
-            return rect.top < (window.innerHeight || 800) - 40 && rect.bottom > 40;
-        }
         async execute(runner) {
-            if (this.cooling()) {
-                this.ui.cooldown();
-                return;
-            }
-            const threshold = this.ui.threshold;
-            for (const post of Array.from(document.querySelectorAll('.topic-post'))) {
+            if (this.cooling()) { this.view.cooldown(); return; }
+            for (const post of document.querySelectorAll('.topic-post')) {
                 if (this.cooling() || !runner.active) return;
-                const postKey = post.getAttribute('data-post-id') || post.getAttribute('data-post-number') || post.id;
-                if (!postKey || this.processedPosts.has(postKey)) continue;
-                if (!this.isInViewport(post)) continue;
-                if (this.isLiked(post)) {
-                    this.processedPosts.add(postKey);
-                    continue;
-                }
-                if (threshold > 0 && this.getScore(post) < threshold) continue;
-                const btn = post.querySelector('.can-toggle-reaction button.btn-toggle-reaction-like, .discourse-reactions-reaction-button button');
-                if (!btn) continue;
-                this.processedPosts.add(postKey);
-                Stealth.click(btn);
-                Logger.log(`自动点赞：第 ${post.getAttribute('data-post-number') || postKey} 楼`);
-                if (!(await Tool.wait(Tool.rand(500, 2000), runner))) return;
+                const identifier = post.dataset.postNumber;
+                if (!identifier || this.history.has(identifier)) continue;
+                const bounds = post.getBoundingClientRect();
+                if (bounds.top >= window.innerHeight - 40 || bounds.bottom <= 40) continue;
+                if (post.querySelector('.has-used-main-reaction')) { this.history.add(identifier); continue; }
+                const counter = post.querySelector('.discourse-reactions-counter'), score = counter ? Tool.parse(counter.innerText || counter.getAttribute('aria-label')) : 0;
+                if (this.view.threshold > 0 && score < this.view.threshold) continue;
+                const button = post.querySelector('.btn-toggle-reaction-like');
+                if (!button) continue;
+                this.history.add(identifier); button.click(); Logger.write(`自动点赞：第 ${identifier} 楼`);
+                if (!(await Tool.wait(Tool.random(500, 2000), runner))) return;
             }
         }
     }
 
     class Runner {
-        constructor(liker, ui) {
-            this.liker = liker;
-            this.ui = ui;
-            this.moving = false;
-            this.currentTopicId = null;
-            this.url = location.href;
-            this.readPostKeys = new Set();
-            this.resetPacing();
-            setInterval(() => {
-                if (this.url !== location.href) {
-                    const prevUrl = this.url;
-                    this.url = location.href;
-                    const prevId = Tool.identity(prevUrl);
-                    const curId = Tool.identity(location.href);
-                    if (prevId && curId && prevId === curId) return;
-                    if (this.active) {
-                        this.moving = false;
-                        this.currentTopicId = null;
-                        this.liker.reset();
-                        this.resetPacing();
-                        this.resume();
-                    }
+        constructor(liker, view) {
+            this.liker = liker; this.view = view; this.moving = false; this.address = location.href; this.records = new Set(); this.pacing();
+            const push = history.pushState, replace = history.replaceState;
+            history.pushState = function() { const response = push.apply(this, arguments); window.dispatchEvent(new Event('lda_route_change')); return response; };
+            history.replaceState = function() { const response = replace.apply(this, arguments); window.dispatchEvent(new Event('lda_route_change')); return response; };
+            window.addEventListener('popstate', () => window.dispatchEvent(new Event('lda_route_change')));
+            window.addEventListener('lda_route_change', () => {
+                if (this.address !== location.href) {
+                    const previous = Tool.identity(this.address), current = Tool.identity(location.href);
+                    this.address = location.href;
+                    if (previous && current && previous === current) return;
+                    if (this.active) { this.moving = false; this.liker.reset(); this.pacing(); this.resume(); }
                 }
-            }, 2000);
-            const pauseUntil = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
-            if (pauseUntil > Date.now()) {
-                this.ui.status('暂停');
-                setTimeout(() => {
-                    sessionStorage.removeItem('lda_pause_until');
-                    Logger.log('解除限流：恢复运行');
-                    this.start();
-                }, pauseUntil - Date.now());
+            });
+            const pause = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
+            if (pause > Date.now()) {
+                this.view.status('暂停');
+                setTimeout(() => { sessionStorage.removeItem('lda_pause_until'); Logger.write('解除限流：恢复运行'); this.start(); }, pause - Date.now());
             } else if (this.active) {
-                if (!sessionStorage.getItem('lda_start_time')) {
-                    sessionStorage.setItem('lda_start_time', String(Date.now()));
-                }
-                if (this.ui.keepAlive) Stealth.keepAlive();
-                this.ui.status('运行');
-                this.resume();
+                if (!sessionStorage.getItem('lda_start_time')) sessionStorage.setItem('lda_start_time', String(Date.now()));
+                if (this.view.keep) Stealth.keep();
+                this.view.status('运行'); this.resume();
             }
         }
-        get active() { return sessionStorage.getItem('lda_active') === 'true'; }
-        set active(v) { sessionStorage.setItem('lda_active', v); }
-        get count() { return parseInt(sessionStorage.getItem('lda_count') || '0', 10); }
-        set count(v) { sessionStorage.setItem('lda_count', v); }
-        resetPacing() {
-            this.readPostKeys.clear();
-            this.scrollCount = 0;
-            this.textCount = 0;
-            this.targetScrolls = Tool.rand(3, 6);
-            this.targetChars = Tool.rand(512, 1024);
-        }
-        checkTimeout() {
-            if (this.ui.duration > 0) {
-                const startTime = parseInt(sessionStorage.getItem('lda_start_time') || '0', 10);
-                if (startTime && Date.now() - startTime >= this.ui.duration * 60 * 1000) {
-                    this.stop(`达到限时 ${this.ui.duration} 分钟`);
-                    return true;
-                }
-            }
+        
+        get active() { return sessionStorage.getItem('lda_active') === 'true'; } set active(value) { sessionStorage.setItem('lda_active', value); }
+        get count() { return parseInt(sessionStorage.getItem('lda_count') || '0', 10); } set count(value) { sessionStorage.setItem('lda_count', value); }
+        pacing() { this.records.clear(); this.scrolls = 0; this.characters = 0; this.flips = Tool.random(3, 6); this.words = Tool.random(500, 2000); }
+        
+        timeout() {
+            const start = parseInt(sessionStorage.getItem('lda_start_time') || '0', 10);
+            if (this.view.duration > 0 && start > 0 && Date.now() - start >= this.view.duration * 60000) { this.stop(`达到限时 ${this.view.duration} 分钟`); return true; }
             return false;
         }
-        navigate(url) {
-            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-            try {
-                const router = win.Discourse?.__container__?.lookup('service:router');
-                if (router) { router.transitionTo(url); return; }
-            } catch (_) {}
-            location.href = url;
+        
+        navigate(address) {
+            const context = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window, router = context.Discourse?.__container__?.lookup('service:router');
+            if (router) router.transitionTo(address); else location.href = address;
         }
-        async waitCF() {
-            const start = Date.now();
-            while (this.active && Tool.isCF() && Date.now() - start < 5000) {
-                if (!(await Tool.wait(500, this))) return false;
-            }
-            return !Tool.isCF();
-        }
+        
         start() {
-            this.moving = false;
-            sessionStorage.removeItem('lda_pause_until');
-            sessionStorage.setItem('lda_start_time', String(Date.now()));
-            if (this.ui.keepAlive) Stealth.keepAlive();
-            this.active = true;
-            this.count = 0;
-            this.ui.status('运行');
-            this.liker.reset();
-            this.resetPacing();
-            this.resume();
+            this.moving = false; sessionStorage.removeItem('lda_pause_until'); sessionStorage.setItem('lda_start_time', String(Date.now()));
+            if (this.view.keep) Stealth.keep();
+            this.active = true; this.count = 0; this.view.status('运行'); this.liker.reset(); this.pacing(); this.resume();
         }
+        
         stop(reason = '') {
-            this.active = false;
-            this.moving = false;
-            this.currentTopicId = null;
-            this.liker.reset();
-            this.resetPacing();
-            sessionStorage.removeItem('lda_pause_until');
-            sessionStorage.removeItem('lda_start_time');
-            this.ui.status('停止');
-            Stealth.suspendKeepAlive();
-            if (reason) Logger.log(`停止：${reason}`);
+            this.active = false; this.moving = false; this.liker.reset(); this.pacing();
+            sessionStorage.removeItem('lda_pause_until'); sessionStorage.removeItem('lda_start_time');
+            this.view.status('停止'); Stealth.suspend(); if (reason) Logger.write(`停止：${reason}`);
         }
-        pause(sec) {
-            const ms = sec * 1000;
-            this.active = false;
-            this.moving = false;
-            this.currentTopicId = null;
-            this.liker.reset();
-            this.resetPacing();
-            sessionStorage.setItem('lda_pause_until', String(Date.now() + ms));
-            this.ui.status('暂停');
-            Stealth.suspendKeepAlive();
-            Logger.log(`暂停运行：${Math.round(sec / 60) || sec}${sec >= 60 ? '分钟' : '秒'}`);
+        
+        pause(seconds) {
+            this.active = false; this.moving = false; this.liker.reset(); this.pacing();
+            sessionStorage.setItem('lda_pause_until', String(Date.now() + seconds * 1000));
+            this.view.status('暂停'); Stealth.suspend(); Logger.write(`暂停运行：${Math.round(seconds / 60) || seconds}${seconds >= 60 ? '分钟' : '秒'}`);
             setTimeout(() => {
-                const until = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
-                if (until && Date.now() >= until) {
-                    sessionStorage.removeItem('lda_pause_until');
-                    Logger.log('解除限流：恢复运行');
-                    this.start();
-                }
-            }, ms);
+                if (parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10) <= Date.now()) { sessionStorage.removeItem('lda_pause_until'); Logger.write('解除限流：恢复运行'); this.start(); }
+            }, seconds * 1000);
         }
+        
         async resume() {
-            if (!this.active) return;
-            if (this.checkTimeout()) return;
-            if (Tool.isCF() && !(await this.waitCF())) return;
-            if (Tool.topic()) await this.browse();
-            else await this.forward();
+            if (!this.active || this.timeout()) return;
+            if (Tool.cloudflare() && !(await Tool.poll(() => !Tool.cloudflare(), 5000, 500))) return;
+            if (Tool.identity()) await this.browse(); else await this.forward();
         }
-        async finishTopic(id) {
-            this.count++;
-            this.ui.updateReadCount(this.count);
-            this.currentTopicId = null;
-            this.liker.reset();
-            this.resetPacing();
-            this.moving = false;
-            if (this.ui.limit > 0 && this.count >= this.ui.limit) {
-                this.stop(`达到限额 ${this.ui.limit} 篇`);
-                return;
-            }
-            if (this.checkTimeout()) return;
+        
+        async finish() {
+            this.count++; this.view.update(this.count); this.liker.reset(); this.pacing(); this.moving = false;
+            if (this.view.limit > 0 && this.count >= this.view.limit) { this.stop(`达到限额 ${this.view.limit} 篇`); return; }
+            if (this.timeout()) return;
             await this.forward();
         }
+        
         async browse() {
-            if (this.moving) return;
-            if (this.checkTimeout()) return;
-            if (Tool.isCF() && !(await this.waitCF())) return;
-            this.moving = true;
-            this.resetPacing();
-            const tDom = Date.now();
-            while (this.active && Date.now() - tDom < 5000) {
-                if (this.checkTimeout()) { this.moving = false; return; }
-                const curId = Tool.identity();
-                if (curId && document.querySelector('.topic-post') && Tool.title()) break;
-                if (!(await Tool.wait(500, this))) { this.moving = false; return; }
-            }
-            const id = Tool.identity();
-            if (!id) {
-                this.moving = false;
-                await this.forward();
-                return;
-            }
-            this.currentTopicId = String(id);
-            this.liker.reset();
-            const maxP = this.ui.maxPosts;
-            if (maxP > 0) {
-                const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                const count = win.Discourse?.__container__?.lookup('controller:topic')?.model?.posts_count || 0;
-                if (count > maxP) {
-                    await this.finishTopic(id);
-                    return;
-                }
-            }
-            Logger.log(`开始阅读：${Tool.title()}`);
+            if (this.moving || this.timeout()) return;
+            this.moving = true; this.pacing();
+            const context = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            let heading = '';
+            
+            const ready = await Tool.poll(() => {
+                const identifier = Tool.identity(), post = document.querySelector('.topic-post'), model = context.Discourse?.__container__?.lookup?.('controller:topic')?.model;
+                if (identifier && post && model?.id && String(model.id) === String(identifier)) { heading = model.title || Tool.title(); return Boolean(heading); }
+                return false;
+            }, 5000, 500);
+            
+            if (!ready) { this.moving = false; await this.forward(); return; }
+            if (this.view.maximum > 0 && (context.Discourse?.__container__?.lookup('controller:topic')?.model?.posts_count || 0) > this.view.maximum) { await this.finish(); return; }
+            
+            Logger.write(`开始阅读：${heading}`);
             await this.liker.execute(this);
-            let lastScrollY = -1;
-            let bottomStuckCount = 0;
-            const topicStartTime = Date.now();
-            const topicDuration = Tool.rand(3000, 5000);
+            if (!(await Tool.wait(Tool.random(2000, 5000), this))) { this.moving = false; return; }
+            
+            let previous = -1, stuck = 0;
             while (this.active && this.moving) {
-                if (this.checkTimeout()) { this.moving = false; return; }
-                if (Tool.isCF() && !(await this.waitCF())) { this.moving = false; return; }
-                if (Date.now() - topicStartTime >= topicDuration) {
-                    await this.finishTopic(id);
-                    return;
-                }
-                const tLoad = Date.now();
-                while (this.active && this.moving && !Tool.ready()) {
-                    if (Date.now() - tLoad >= 5000) break;
-                    if (Date.now() - topicStartTime >= topicDuration) {
-                        await this.finishTopic(id);
-                        return;
-                    }
-                    if (!(await Tool.wait(500, this))) { this.moving = false; return; }
-                }
-                const vh = window.innerHeight || 800;
-                const minStep = Math.floor(vh * 0.75);
-                const dot = Tool.nextDot();
-                let targetScrollY = 0;
-                if (dot) {
-                    const anchor = (dot.closest('.topic-post') || dot).getBoundingClientRect();
-                    targetScrollY = anchor.top + window.scrollY - window.innerHeight * 0.3;
-                }
-                const maxScroll = Math.max(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) - window.innerHeight);
-                window.scrollTo({
-                    top: Math.min(maxScroll, Math.max(window.scrollY + (Tool.bottom() ? 0 : minStep), targetScrollY)),
-                    behavior: Tool.scrollBehavior()
-                });
+                if (this.timeout()) { await this.finish(); return; }
+                await Tool.poll(() => Tool.ready(), 5000, 500);
+                
+                const dot = Tool.unread(), destination = dot ? (dot.closest('.topic-post') || dot).getBoundingClientRect().top + window.scrollY - window.innerHeight * 0.3 : 0;
+                const step = Math.floor((window.innerHeight || 800) * (this.view.full ? 0.4 : 0.5));
+                window.scrollTo({ top: Math.min(Math.max(0, document.documentElement.scrollHeight - window.innerHeight), Math.max(window.scrollY + (Tool.bottom() ? 0 : step), destination)), behavior: document.hidden ? 'instant' : 'smooth' });
+                
                 await this.liker.execute(this);
-                this.scrollCount++;
-                let newChars = 0;
-                document.querySelectorAll('.topic-post').forEach(post => {
-                    const rect = post.getBoundingClientRect();
-                    if (rect.top < vh - 40 && rect.bottom > 40) {
-                        const key = post.getAttribute('data-post-id') || post.getAttribute('data-post-number') || post.id;
-                        if (key && !this.readPostKeys.has(key)) {
-                            this.readPostKeys.add(key);
-                            newChars += Tool.countContent(post);
-                        }
-                    }
-                });
-                this.textCount += newChars;
-                let delay;
-                if (this.scrollCount >= this.targetScrolls || this.textCount >= this.targetChars) {
-                    delay = Tool.rand(500, 5000);
-                    this.scrollCount = 0;
-                    this.textCount = 0;
-                    this.targetScrolls = Tool.rand(3, 6);
-                    this.targetChars = Tool.rand(512, 1024);
-                } else {
-                    delay = Tool.rand(500, 2000);
-                }
-                const tDot = Date.now();
-                while (this.active && this.moving) {
-                    if (this.checkTimeout()) { this.moving = false; return; }
-                    if (Date.now() - topicStartTime >= topicDuration) {
-                        await this.finishTopic(id);
-                        return;
-                    }
-                    if (!Tool.nextDot() || Date.now() - tDot >= 5000) break;
-                    if (!(await Tool.wait(500, this))) { this.moving = false; return; }
-                }
-                const waitTime = Math.min(delay, Math.max(0, topicDuration - (Date.now() - topicStartTime)));
-                if (waitTime > 0 && !(await Tool.wait(waitTime, this))) { this.moving = false; return; }
-                if (Date.now() - topicStartTime >= topicDuration) {
-                    await this.finishTopic(id);
-                    return;
-                }
-                const currentScrollY = window.scrollY || document.documentElement.scrollTop;
-                if (Tool.bottom() || (lastScrollY === currentScrollY && currentScrollY > 0)) {
-                    bottomStuckCount++;
-                } else {
-                    bottomStuckCount = 0;
-                }
-                lastScrollY = currentScrollY;
-                if (bottomStuckCount >= 2 && Tool.ready() && Tool.bottom()) {
-                    const remaining = topicDuration - (Date.now() - topicStartTime);
-                    if (remaining > 0) {
-                        if (!(await Tool.wait(remaining, this))) { this.moving = false; return; }
-                    }
-                    await this.finishTopic(id);
-                    return;
-                }
+                this.scrolls++;
+                document.querySelectorAll('.topic-post').forEach(post => { if (post.dataset.postNumber && !this.records.has(post.dataset.postNumber)) { this.records.add(post.dataset.postNumber); this.characters += Tool.measure(post); }});
+                
+                let delay = Tool.random(500, 2000);
+                if (this.scrolls >= this.flips || this.characters >= this.words) { delay = Tool.random(2000, 5000); this.scrolls = 0; this.characters = 0; this.flips = Tool.random(3, 6); this.words = Tool.random(500, 2000); }
+                
+                await Tool.poll(() => !Tool.unread(), 5000, 500);
+                if (!(await Tool.wait(delay, this))) { this.moving = false; return; }
+                
+                const position = window.scrollY || document.documentElement.scrollTop;
+                stuck = (Tool.bottom() || (previous === position && position > 0)) ? stuck + 1 : 0;
+                previous = position;
+                
+                if (stuck >= 2 && Tool.ready() && Tool.bottom()) { await this.finish(); return; }
             }
             this.moving = false;
         }
+        
         async forward() {
-            if (!this.active) return;
-            if (this.checkTimeout()) return;
-            if (Tool.isCF() && !(await this.waitCF())) return;
-            this.moving = true;
-            this.currentTopicId = null;
-            this.liker.reset();
-            this.resetPacing();
-            const isList = /^\/(latest|top|new|unread)?$/.test(location.pathname) || location.pathname.startsWith('/latest');
-            if (Tool.topic() || !isList) {
-                this.navigate('/latest');
-                const tNav = Date.now();
-                while (this.active && Date.now() - tNav < 5000) {
-                    if (document.querySelector('.topic-list-item')) break;
-                    if (!(await Tool.wait(500, this))) return;
-                }
-            }
-            let retry = 0;
-            while (this.active) {
-                if (this.checkTimeout()) { this.moving = false; return; }
-                if (Tool.isCF() && !(await this.waitCF())) { this.moving = false; return; }
-                const selector = this.ui.skip ? '.topic-list-item.unseen-topic' : '.topic-list-item';
-                const items = document.querySelectorAll(selector);
-                if (!items.length) {
-                    if (!(await Tool.wait(500, this))) return;
-                    retry++;
-                    if (retry >= 10) {
-                        this.navigate('/latest');
-                        retry = 0;
-                    }
-                    continue;
-                }
-                let targetLink = null;
-                for (const row of items) {
-                    const link = row.querySelector('a.title, a.raw-topic-link');
+            if (!this.active || this.timeout()) return;
+            this.moving = true; this.liker.reset(); this.pacing();
+
+            let clicked = false;
+            if (Tool.identity()) {
+                const selector = this.view.skip ? '.more-topics__container .topic-list-item.unseen-topic' : '.more-topics__container .topic-list-item';
+                const suggestions = document.querySelectorAll(selector);
+                for (const row of suggestions) {
+                    const link = row.querySelector('a.title'); 
                     if (!link) continue;
-                    if (this.ui.maxPosts > 0) {
-                        const repliesEl = row.querySelector('td.topic-likes-replies-data span.number');
-                        const count = parseInt(repliesEl?.textContent?.trim() || '0', 10);
-                        if (count > this.ui.maxPosts) continue;
+                    if (this.view.maximum > 0) {
+                        const counter = row.querySelector('td.topic-likes-replies-data span.number');
+                        if (counter && Tool.parse(counter.textContent) > this.view.maximum) continue;
                     }
-                    targetLink = link;
-                    break;
-                }
-                if (targetLink) {
+                    clicked = true;
                     this.moving = false;
-                    Stealth.click(targetLink);
+                    link.click();
                     return;
                 }
-                const prevCount = items.length;
-                window.scrollBy({
-                    top: window.innerHeight * 0.85,
-                    behavior: Tool.scrollBehavior()
-                });
-                const tScroll = Date.now();
-                while (this.active && Date.now() - tScroll < 5000) {
+            }
+
+            if (!clicked) {
+                if (Tool.identity() || !/^\/(latest|top|new|unread)?$/.test(location.pathname)) { 
+                    this.navigate('/latest'); 
+                    await Tool.poll(() => document.querySelector('.topic-list-item'), 5000, 500); 
+                }
+            }
+            
+            while (this.active) {
+                if (this.timeout()) { this.moving = false; return; }
+                const selector = this.view.skip ? '.topic-list-item.unseen-topic' : '.topic-list-item', items = document.querySelectorAll(selector);
+                if (!items.length) {
                     if (!(await Tool.wait(500, this))) return;
-                    if (document.querySelectorAll(selector).length > prevCount || Tool.bottom()) break;
+                    this.navigate('/latest'); await Tool.poll(() => document.querySelector('.topic-list-item'), 5000, 500); continue;
                 }
-                if (Tool.bottom()) {
-                    this.navigate('/latest');
-                    const tNav = Date.now();
-                    while (this.active && Date.now() - tNav < 5000) {
-                        if (document.querySelector('.topic-list-item')) break;
-                        if (!(await Tool.wait(500, this))) return;
-                    }
+                
+                let target = null;
+                for (const row of items) {
+                    const link = row.querySelector('a.title'); if (!link) continue;
+                    if (this.view.maximum > 0 && (row.querySelector('td.topic-likes-replies-data span.number') ? Tool.parse(row.querySelector('td.topic-likes-replies-data span.number').textContent) : 0) > this.view.maximum) continue;
+                    target = link; break;
                 }
+                
+                if (target) { this.moving = false; target.click(); return; }
+                
+                const previous = items.length;
+                window.scrollBy({ top: window.innerHeight * 0.85, behavior: document.hidden ? 'instant' : 'smooth' });
+                const timestamp = Date.now();
+                while (this.active && Date.now() - timestamp < 5000) { if (!(await Tool.wait(500, this))) return; if (document.querySelectorAll(selector).length > previous || Tool.bottom()) break; }
+                if (Tool.bottom()) { this.navigate('/latest'); await Tool.poll(() => document.querySelector('.topic-list-item'), 5000, 500); }
             }
             this.moving = false;
         }
     }
 
-    class UI {
-        constructor() {
-            this.userLoaded = false;
-            this.creditLoaded = false;
-            this.styles();
-            this.construct();
-            this.events();
-            this.cooldown();
-        }
+    class View {
+        constructor() { this.styles(); this.construct(); this.events(); this.cooldown(); }
         get limit() { return parseInt(document.getElementById('lda-limit').value, 10); }
         get duration() { return parseInt(document.getElementById('lda-duration').value, 10) || 0; }
-        get maxPosts() { return parseInt(document.getElementById('lda-maxPosts').value, 10) || 0; }
+        get maximum() { return parseInt(document.getElementById('lda-maximum').value, 10) || 0; }
         get threshold() { return parseInt(document.getElementById('lda-threshold').value, 10); }
         get skip() { return document.getElementById('lda-skip').checked; }
         get full() { return document.getElementById('lda-full').checked; }
-        get keepAlive() { return document.getElementById('lda-keepalive').checked; }
+        get keep() { return document.getElementById('lda-keep').checked; }
+        
         styles() {
             GM_addStyle(`
-                #lda-box{position:fixed;right:16px;top:50%;transform:translateY(-50%);width:56px;height:56px;background:#fff;border-radius:28px;z-index:99999;box-shadow:0 4px 16px rgba(13,148,136,.18);border:1px solid #ccfbf1;overflow:hidden;transition:width .25s cubic-bezier(.4,0,.2,1),height .25s cubic-bezier(.4,0,.2,1),border-radius .25s cubic-bezier(.4,0,.2,1),box-shadow .25s cubic-bezier(.4,0,.2,1),border-color .25s cubic-bezier(.4,0,.2,1),padding .25s cubic-bezier(.4,0,.2,1);box-sizing:border-box;display:flex;flex-direction:column;padding:11px}
-                #lda-box.expanded{width:265px;height:auto;border-radius:16px;padding:12px;max-height:92vh;overflow-y:auto}
-                #lda-box.expanded::-webkit-scrollbar{width:4px}
-                #lda-box.expanded::-webkit-scrollbar-thumb{background:#99f6e4;border-radius:2px}
-                #lda-box.active-run{border-color:#5eead4;box-shadow:0 0 14px rgba(20,184,166,.4)}
-                @keyframes lda-spin{100%{transform:rotate(360deg)}}
-                #lda-panel-content{display:flex;flex-direction:column;gap:8px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;width:100%}
-                #lda-header{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#64748b;height:16px;padding:0 2px}
-                #lda-header-title{font-weight:600;color:#0f766e}
-                #lda-header a{color:#0d9488;text-decoration:none;transition:color .2s;font-weight:500}
-                #lda-header a:hover{color:#0f766e;text-decoration:underline}
-                #lda-top-bar{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%;height:32px}
-                #lda-execute{flex:1;height:32px}
-                #lda-gear{width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:#0d9488;cursor:pointer;background:transparent;border:none;transition:all .2s;flex-shrink:0;box-sizing:border-box;border-radius:8px}
-                #lda-gear:hover{color:#0f766e;background:#ccfbf1}
-                #lda-box:not(.expanded) .lda-icon-close{display:none}
-                #lda-box.expanded .lda-icon-gear{display:none}
-                #lda-box.expanded .lda-icon-close{display:block}
-                #lda-box.expanded #lda-gear{background:#f0fdfa;border:1px solid #ccfbf1}
-                #lda-box.expanded #lda-gear:hover{background:#ccfbf1}
-                #lda-box.active-run #lda-gear .lda-icon-gear{animation:lda-spin 4s linear infinite}
-                #lda-box:not(.expanded) #lda-panel-content{gap:0}
-                #lda-box:not(.expanded) #lda-top-bar{width:32px;height:32px;margin:0 auto}
-                #lda-box:not(.expanded) #lda-header,
-                #lda-box:not(.expanded) #lda-execute,
-                #lda-box:not(.expanded) .lda-group,
-                #lda-box:not(.expanded) .lda-extra-group{display:none !important}
-                .lda-group{display:flex;flex-direction:column;gap:6px;width:100%}
-                .lda-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#1e293b;height:26px}
-                .lda-ctrl{display:flex;align-items:center;justify-content:flex-end;width:64px}
-                .lda-inp{background:#f0fdfa;border:1px solid #99f6e4;color:#0f766e;border-radius:8px;padding:0 4px;font-size:12px;outline:none;text-align:center;width:64px;height:24px}
-                .lda-checkbox{cursor:pointer;width:16px;height:16px;accent-color:#0d9488;margin:0}
-                .lda-button{width:100%;height:32px;border:none;border-radius:10px;font-weight:600;cursor:pointer;color:#fff;font-size:13px;transition:all .2s;display:flex;align-items:center;justify-content:center}
-                .lda-button.start{background:linear-gradient(135deg,#06b6d4,#0d9488)}
-                .lda-button.stop{background:linear-gradient(135deg,#14b8a6,#10b981)}
-                .lda-button.pause{background:linear-gradient(135deg,#f59e0b,#d97706)}
-                #lda-threshold-label{cursor:pointer;user-select:none}
-                details summary::-webkit-details-marker, details summary::marker{display:none !important}
-                details summary{list-style:none;outline:none}
-                details summary.lda-row{display:flex !important;justify-content:space-between !important;align-items:center !important;width:100% !important;height:26px !important}
-                .lda-extra-group{display:flex;flex-direction:column;gap:6px;width:100%}
-                .lda-action-btn{background:#f0fdfa;border:1px solid #99f6e4;color:#0f766e;border-radius:6px;padding:0 8px;font-size:11px;height:22px;cursor:pointer;line-height:20px;outline:none;transition:all .2s}
-                .lda-action-btn:hover{background:#ccfbf1;border-color:#5eead4}
-                .lda-grid-content{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;background:#f0fdfa;border:1px solid #ccfbf1;border-radius:8px;padding:6px 8px;margin-top:4px;box-sizing:border-box}
-                .lda-grid-item{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#334155;line-height:1.4}
-                .lda-grid-item .lda-val{font-weight:600;color:#0f766e;margin-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-                .lda-empty-tip{grid-column:span 2;text-align:center;color:#94a3b8;font-size:11px;padding:4px 0}
-                #lda-log-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 8px;font-size:11px;color:#475569;max-height:100px;overflow-y:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;display:flex;flex-direction:column;gap:3px;word-break:break-all;box-sizing:border-box}
-                #lda-log-box::-webkit-scrollbar{width:4px}
-                #lda-log-box::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:2px}
-                .lda-log-line{line-height:1.35}
-                .lda-log-time{color:#94a3b8;margin-right:4px}
-                .lda-log-text{color:#334155}
+                #lda-box { position:fixed; right:16px; top:50%; transform:translateY(-50%); width:56px; height:56px; background:#fff; border-radius:28px; z-index:99999; box-shadow:0 4px 16px rgba(13,148,136,.18); border:1px solid #ccfbf1; overflow:hidden; transition:all .25s; box-sizing:border-box; display:flex; flex-direction:column; padding:11px }
+                #lda-box.expanded { width:265px; height:auto; border-radius:16px; padding:12px; max-height:92vh; overflow-y:auto }
+                #lda-box.active-run { border-color:#5eead4; box-shadow:0 0 14px rgba(20,184,166,.4) }
+                #lda-panel-content { display:flex; flex-direction:column; gap:8px; font-family:-apple-system,BlinkMacSystemFont,sans-serif; width:100% }
+                #lda-header { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#64748b; height:16px; padding:0 2px }
+                #lda-header-title { font-weight:600; color:#0f766e }
+                #lda-header a { color:#0d9488; text-decoration:none }
+                #lda-top-bar { display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100%; height:32px }
+                #lda-execute { flex:1; height:32px }
+                #lda-gear { width:32px; height:32px; display:flex; align-items:center; justify-content:center; color:#0d9488; cursor:pointer; background:transparent; border:none; border-radius:8px }
+                #lda-box:not(.expanded) .lda-icon-close { display:none }
+                #lda-box.expanded .lda-icon-gear { display:none }
+                #lda-box.expanded .lda-icon-close { display:block }
+                #lda-box.expanded #lda-gear { background:#f0fdfa; border:1px solid #ccfbf1 }
+                #lda-box:not(.expanded) #lda-panel-content { gap:0 }
+                #lda-box:not(.expanded) #lda-top-bar { width:32px; height:32px; margin:0 auto }
+                #lda-box:not(.expanded) #lda-header, #lda-box:not(.expanded) #lda-execute, #lda-box:not(.expanded) .lda-group, #lda-box:not(.expanded) .lda-extra-group { display:none !important }
+                .lda-group { display:flex; flex-direction:column; gap:6px; width:100% }
+                .lda-row { display:flex; justify-content:space-between; align-items:center; font-size:13px; color:#1e293b; height:26px }
+                .lda-ctrl { display:flex; align-items:center; justify-content:flex-end; width:64px }
+                .lda-inp { background:#f0fdfa; border:1px solid #99f6e4; color:#0f766e; border-radius:8px; padding:0 4px; font-size:12px; outline:none; text-align:center; width:64px; height:24px }
+                .lda-checkbox { cursor:pointer; width:16px; height:16px; accent-color:#0d9488; margin:0 }
+                .lda-button { width:100%; height:32px; border:none; border-radius:10px; font-weight:600; cursor:pointer; color:#fff; font-size:13px; display:flex; align-items:center; justify-content:center }
+                .lda-button.start { background:linear-gradient(135deg,#06b6d4,#0d9488) }
+                .lda-button.stop { background:linear-gradient(135deg,#14b8a6,#10b981) }
+                .lda-button.pause { background:linear-gradient(135deg,#f59e0b,#d97706) }
+                #lda-threshold-label { cursor:pointer }
+                details summary::-webkit-details-marker, details summary::marker { display:none !important }
+                details summary { list-style:none; outline:none }
+                details summary.lda-row { display:flex !important; justify-content:space-between !important; align-items:center !important; width:100% !important; height:26px !important }
+                .lda-extra-group { display:flex; flex-direction:column; gap:6px; width:100% }
+                .lda-action-btn { background:#f0fdfa; border:1px solid #99f6e4; color:#0f766e; border-radius:6px; padding:0 8px; font-size:11px; height:22px; cursor:pointer; line-height:20px; outline:none }
+                .lda-grid-content { display:grid; grid-template-columns:1fr 1fr; gap:4px 8px; background:#f0fdfa; border:1px solid #ccfbf1; border-radius:8px; padding:6px 8px; margin-top:4px }
+                .lda-grid-item { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#334155 }
+                .lda-grid-item .lda-val { font-weight:600; color:#0f766e; margin-left:4px }
+                .lda-empty-tip { grid-column:span 2; text-align:center; color:#94a3b8; font-size:11px; padding:4px 0 }
+                #lda-log-box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:6px 8px; font-size:11px; color:#475569; max-height:180px; overflow-y:auto; font-family:ui-monospace,monospace; display:flex; flex-direction:column; gap:3px; word-break:break-all }
+                .lda-log-time { color:#94a3b8; margin-right:4px } .lda-log-text { color:#334155 }
             `);
         }
+        
         construct() {
             this.box = document.createElement('div');
             this.box.id = 'lda-box';
             this.box.innerHTML = `
                 <div id="lda-panel-content">
                     <div id="lda-header">
-                        <span id="lda-header-title">Auto LD</span>
-                        <a href="https://github.com/YisRime/AutoLD" target="_blank">Yis_Rime | GitHub</a>
+                        <span id="lda-header-title">Auto LD</span><a href="https://github.com/YisRime/AutoLD" target="_blank">GitHub</a>
                     </div>
                     <div id="lda-top-bar">
                         <button id="lda-execute" class="lda-button start">开始</button>
                         <div id="lda-gear" title="展开/收起">
-                            <svg class="lda-icon-gear" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                                <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.485.485 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
-                            </svg>
-                            <svg class="lda-icon-close" viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-                                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                            </svg>
+                            <svg class="lda-icon-gear" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.485.485 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                            <svg class="lda-icon-close" viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                         </div>
                     </div>
                     <div class="lda-group">
@@ -731,333 +418,170 @@
                         <div class="lda-row" title="完整阅读每个话题未读内容"><span>完整阅读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-full"></div></div>
                         <div class="lda-row" title="设置本次阅读话题数量上限"><span>阅读限额</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-limit" min="0"></div></div>
                         <div class="lda-row" title="设置本次阅读话题时长上限"><span>阅读限时</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-duration" min="0"></div></div>
-                        <div class="lda-row" title="阅读总数少于设定值的话题"><span>最大楼层</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-maxPosts" min="0"></div></div>
+                        <div class="lda-row" title="阅读总数少于设定值的话题"><span>最大楼层</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-maximum" min="0"></div></div>
                         <div class="lda-row" title="自动点赞的赞数阈值 | 点击文字可重置冷却"><span id="lda-threshold-label">点赞阈值</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-threshold" min="-1"></div></div>
                         <details style="width:100%">
-                            <summary class="lda-row" style="cursor:pointer" title="展开/收起">
-                                <span>高级选项</span>
-                            </summary>
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>高级选项</span></summary>
                             <div style="display:flex;flex-direction:column;gap:6px;padding-top:4px">
-                                <div class="lda-row" title="保持不被浏览器休眠"><span>后台保活</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-keepalive"></div></div>
+                                <div class="lda-row" title="保持不被浏览器休眠"><span>后台保活</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-keep"></div></div>
                                 <div class="lda-row" title="手动进行 CF 验证"><span>CF 验证</span><div class="lda-ctrl"><button id="lda-cf-btn" class="lda-inp" style="cursor:pointer">验证</button></div></div>
                             </div>
                         </details>
-                        <details style="width:100%" id="lda-log-detail" open>
-                            <summary class="lda-row" style="cursor:pointer" title="展开/收起">
-                                <span>运行日志</span>
-                                <div class="lda-ctrl">
-                                    <button class="lda-action-btn" id="lda-clear-log">清空</button>
-                                </div>
-                            </summary>
+                        <details style="width:100%" open>
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>运行日志</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-clear-log">清空</button></div></summary>
                             <div id="lda-log-box"></div>
                         </details>
                     </div>
                     <div class="lda-extra-group">
-                        <details style="width:100%" id="lda-user-info-detail">
-                            <summary class="lda-row" style="cursor:pointer" title="展开/收起">
-                                <span>用户信息</span>
-                                <div class="lda-ctrl">
-                                    <button class="lda-action-btn" id="lda-fetch-user">刷新</button>
-                                </div>
-                            </summary>
-                            <div class="lda-grid-content" id="lda-user-list">
-                                <div class="lda-empty-tip">正在获取</div>
-                            </div>
+                        <details style="width:100%" id="lda-user-detail">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>用户信息</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-fetch-user">刷新</button></div></summary>
+                            <div class="lda-grid-content" id="lda-user-list"><div class="lda-empty-tip">正在获取</div></div>
                         </details>
-                        <details style="width:100%" id="lda-credit-info-detail">
-                            <summary class="lda-row" style="cursor:pointer" title="展开/收起">
-                                <span>用户 LDC</span>
-                                <div class="lda-ctrl">
-                                    <button class="lda-action-btn" id="lda-fetch-credit">刷新</button>
-                                </div>
-                            </summary>
-                            <div class="lda-grid-content" id="lda-credit-list">
-                                <div class="lda-empty-tip">正在获取</div>
-                            </div>
+                        <details style="width:100%" id="lda-credit-detail">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>用户 LDC</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-fetch-credit">刷新</button></div></summary>
+                            <div class="lda-grid-content" id="lda-credit-list"><div class="lda-empty-tip">正在获取</div></div>
                         </details>
                     </div>
                 </div>`;
             document.body.appendChild(this.box);
-            Logger.init(document.getElementById('lda-log-box'));
+            Logger.setup(document.getElementById('lda-log-box'));
         }
+        
         events() {
-            this.box.onclick = () => {
-                if (!this.box.classList.contains('expanded')) this.box.classList.add('expanded');
-            };
-            document.getElementById('lda-gear').onclick = (e) => {
-                e.stopPropagation();
-                this.box.classList.toggle('expanded');
-            };
-            [['limit', 0, false], ['duration', 0, false], ['maxPosts', 128, false], ['threshold', 5, false], ['skip', true, true], ['full', false, true]].forEach(([k, def, isChk]) => {
-                const el = document.getElementById(`lda-${k}`);
-                if (isChk) {
-                    el.checked = GM_getValue(`lda_${k}`, def);
-                    el.onchange = e => GM_setValue(`lda_${k}`, e.target.checked);
-                } else {
-                    el.value = GM_getValue(`lda_${k}`, def);
-                    el.onchange = e => GM_setValue(`lda_${k}`, e.target.value);
-                }
+            this.box.onclick = () => { if (!this.box.classList.contains('expanded')) this.box.classList.add('expanded'); };
+            document.getElementById('lda-gear').onclick = (event) => { event.stopPropagation(); this.box.classList.toggle('expanded'); };
+            
+            [['limit', 0, false], ['duration', 0, false], ['maximum', 128, false], ['threshold', 5, false], ['skip', true, true], ['full', false, true]].forEach(([key, fallback, boolean]) => {
+                const element = document.getElementById(`lda-${key}`);
+                if (boolean) { element.checked = GM_getValue(`lda_${key}`, fallback); element.onchange = event => GM_setValue(`lda_${key}`, event.target.checked); }
+                else { element.value = GM_getValue(`lda_${key}`, fallback); element.onchange = event => GM_setValue(`lda_${key}`, event.target.value); }
             });
-            const keepaliveEl = document.getElementById('lda-keepalive');
-            keepaliveEl.checked = GM_getValue('lda_keepalive', true);
-            keepaliveEl.onchange = e => {
-                GM_setValue('lda_keepalive', e.target.checked);
-                if (e.target.checked) {
-                    if (this.executeBtn?.classList.contains('stop')) Stealth.keepAlive();
-                } else {
-                    Stealth.suspendKeepAlive();
-                }
+            
+            const keep = document.getElementById('lda-keep');
+            keep.checked = GM_getValue('lda_keep', true);
+            keep.onchange = event => { GM_setValue('lda_keep', event.target.checked); if (event.target.checked && this.button.classList.contains('stop')) Stealth.keep(); else Stealth.suspend(); };
+            
+            document.getElementById('lda-clear-log').onclick = (event) => { event.stopPropagation(); Logger.clear(); };
+            document.getElementById('lda-cf-btn').onclick = (event) => {
+                event.stopPropagation(); const running = runner.active;
+                if (running) { runner.stop('等待 CF 验证'); this.status('暂停'); }
+                const button = document.getElementById('lda-cf-btn'); button.disabled = true; button.innerText = '验证中';
+                const popup = window.open('https://linux.do/challenge', 'cf_win', 'width=480,height=600');
+                const timer = setInterval(() => { if (!popup || popup.closed) { clearInterval(timer); button.disabled = false; button.innerText = '验证'; if (running) runner.start(); } }, 500);
             };
-            document.getElementById('lda-clear-log').onclick = (e) => {
-                e.stopPropagation();
-                Logger.clear();
+            
+            this.button = document.getElementById('lda-execute');
+            document.getElementById('lda-threshold-label').onclick = (event) => { event.stopPropagation(); GM_setValue('lda_cooldown', 0); this.cooldown(); if (runner.active) this.status('运行'); };
+            
+            const bind = (name, loader) => {
+                const detail = document.getElementById(`lda-${name}-detail`); detail.addEventListener('toggle', event => { if (event.target.open) loader(); });
+                document.getElementById(`lda-fetch-${name}`).onclick = (event) => { event.stopPropagation(); if (!detail.open) detail.open = true; loader(); };
             };
-            document.getElementById('lda-cf-btn').onclick = (e) => {
-                e.stopPropagation();
-                const wasRunning = runner.active;
-                if (wasRunning) {
-                    runner.stop('等待 CF 验证');
-                    this.status('暂停');
-                }
-                const cfBtn = document.getElementById('lda-cf-btn');
-                cfBtn.disabled = true;
-                cfBtn.innerText = '验证中';
-                const w = 480;
-                const h = 600;
-                const left = (window.screen.width - w) / 2;
-                const top = (window.screen.height - h) / 2;
-                const challengeWin = window.open(
-                    'https://linux.do/challenge',
-                    'cf_challenge_window',
-                    `width=${w},height=${h},top=${top},left=${left},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
-                );
-                const timer = setInterval(() => {
-                    if (!challengeWin || challengeWin.closed) {
-                        clearInterval(timer);
-                        cfBtn.disabled = false;
-                        cfBtn.innerText = '验证';
-                        if (wasRunning) {
-                            setTimeout(() => runner.start(), 2000);
-                        }
-                    }
-                }, 500);
-            };
-            this.executeBtn = document.getElementById('lda-execute');
-            document.getElementById('lda-threshold-label').onclick = (e) => {
-                e.stopPropagation();
-                GM_setValue('lda_cooldown', 0);
-                this.cooldown();
-                if (runner.active) this.status('运行');
-            };
-            const bindDetailLoader = (name, loader) => {
-                const detail = document.getElementById(`lda-${name}-info-detail`);
-                detail.addEventListener('toggle', e => {
-                    if (e.target.open && !this[`${name}Loaded`]) loader();
-                });
-                document.getElementById(`lda-fetch-${name}`).onclick = (e) => {
-                    e.stopPropagation();
-                    if (!detail.open) detail.open = true;
-                    loader();
-                };
-            };
-            bindDetailLoader('user', () => this.loadUserInfo());
-            bindDetailLoader('credit', () => this.loadCreditInfo());
+            bind('user', () => this.user()); bind('credit', () => this.credit());
         }
-        async getCurrentUser() {
-            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-            const u = win.Discourse?.__container__?.lookup('service:current-user')
-                || win.Discourse?.currentUser
-                || win.Discourse?.User?.current?.();
-            if (u?.username) return u;
+        
+        async user() {
+            const button = document.getElementById('lda-fetch-user'), list = document.getElementById('lda-user-list'); button.disabled = true;
             try {
-                const preloadedData = document.getElementById('data-preloaded')?.getAttribute('data-preloaded');
-                if (preloadedData) {
-                    const parsed = JSON.parse(preloadedData);
-                    if (parsed.currentUser) return parsed.currentUser;
-                }
-            } catch (_) {}
-            try {
-                const res = await fetch('/session/current.json', { headers: { 'Accept': 'application/json' } });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data?.current_user) return data.current_user;
-                }
-            } catch (_) {}
-            const username = document.querySelector('#current-user a, .current-user a')?.getAttribute('data-username')
-                || document.querySelector('#current-user a, .current-user a')?.getAttribute('href')?.match(/\/u\/([^\/]+)/)?.[1];
-            return username ? { username } : null;
-        }
-        async fetchConnectDetails() {
-            if (!location.hostname.includes('linux.do')) return null;
-            return new Promise((resolve) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'https://connect.linux.do/',
-                    withCredentials: true,
-                    timeout: 10000,
-                    onload: (res) => {
-                        if (res.status !== 200) return resolve(null);
-                        try {
-                            const doc = new DOMParser().parseFromString(res.responseText, 'text/html');
-                            const details = {};
-                            doc.querySelectorAll('.tl3-bar-item').forEach(el => {
-                                const label = el.querySelector('.tl3-bar-label')?.textContent.trim() || '';
-                                const nums = el.querySelector('.tl3-bar-nums')?.textContent.trim() || '';
-                                if (label.includes('获赞天数')) details.likedDays = nums;
-                                if (label.includes('用户') || label.includes('不同用户')) details.likedUsers = nums;
-                            });
-                            doc.querySelectorAll('.tl3-quota-card').forEach(el => {
-                                const label = el.querySelector('.tl3-quota-label')?.textContent.trim() || '';
-                                const nums = el.querySelector('.tl3-quota-nums')?.textContent.trim() || '';
-                                if (label.includes('被举报')) details.flagged = nums;
-                                else if (label.includes('举报用户')) details.flaggedUsers = nums;
-                            });
-                            doc.querySelectorAll('.tl3-veto-item').forEach(el => {
-                                const label = el.querySelector('.tl3-veto-label')?.textContent.trim() || '';
-                                const isMet = el.classList.contains('met');
-                                const vals = el.querySelectorAll('.tl3-veto-value');
-                                const val = isMet ? (vals[0]?.textContent.trim() || '0') : (vals[vals.length - 1]?.textContent.trim() || '0');
-                                if (label.includes('禁言')) details.silenced = val;
-                                if (label.includes('封禁')) details.suspended = val;
-                            });
-                            resolve(details);
-                        } catch (_) {
-                            resolve(null);
-                        }
-                    },
-                    onerror: () => resolve(null),
-                    ontimeout: () => resolve(null)
-                });
-            });
-        }
-        async loadUserInfo() {
-            const btn = document.getElementById('lda-fetch-user');
-            const list = document.getElementById('lda-user-list');
-            btn.disabled = true;
-            try {
-                const me = await this.getCurrentUser();
-                const username = me?.username;
-                if (!username) throw new Error('未登录');
-                const [summaryRes, connectData] = await Promise.all([
-                    fetch(`/u/${encodeURIComponent(username)}/summary.json`, {
-                        headers: { 'Accept': 'application/json' }
-                    }).then(r => r.ok ? r.json() : null).catch(() => null),
-                    this.fetchConnectDetails()
+                const context = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+                const profile = await Tool.poll(() => context.Discourse?.__container__?.lookup?.('service:current-user'), 5000, 500);
+                if (!profile?.username) throw new Error('未登录');
+                
+                const [summary, connect] = await Promise.all([
+                    fetch(`/u/${encodeURIComponent(profile.username)}/summary.json`).then(response => response.ok ? response.json() : null),
+                    new Promise(resolve => {
+                        GM_xmlhttpRequest({
+                            method: 'GET', url: 'https://connect.linux.do/', timeout: 5000,
+                            onload: response => {
+                                if (response.status !== 200) return resolve(null);
+                                const documentObj = new DOMParser().parseFromString(response.responseText, 'text/html'), data = {};
+                                documentObj.querySelectorAll('.tl3-bar-item').forEach(element => {
+                                    const text = element.querySelector('.tl3-bar-label')?.textContent.trim() || '', numbers = element.querySelector('.tl3-bar-nums')?.textContent.trim() || '';
+                                    if (text.includes('获赞天数')) data.days = numbers; if (text.includes('用户') || text.includes('不同用户')) data.users = numbers;
+                                });
+                                documentObj.querySelectorAll('.tl3-quota-card').forEach(element => {
+                                    const text = element.querySelector('.tl3-quota-label')?.textContent.trim() || '', numbers = element.querySelector('.tl3-quota-nums')?.textContent.trim() || '';
+                                    if (text.includes('被举报')) data.flagged = numbers; else if (text.includes('举报用户')) data.reporters = numbers;
+                                });
+                                documentObj.querySelectorAll('.tl3-veto-item').forEach(element => {
+                                    const text = element.querySelector('.tl3-veto-label')?.textContent.trim() || '', met = element.classList.contains('met'), values = element.querySelectorAll('.tl3-veto-value');
+                                    const value = met ? (values[0]?.textContent.trim() || '0') : (values[values.length - 1]?.textContent.trim() || '0');
+                                    if (text.includes('禁言')) data.silenced = value; if (text.includes('封禁')) data.suspended = value;
+                                });
+                                resolve(data);
+                            }, onerror: () => resolve(null)
+                        });
+                    })
                 ]);
-                const s = summaryRes?.user_summary || {};
-                const trustLevel = me?.trust_level ?? s?.trust_level;
-                const levels = ['Lv0', 'Lv1', 'Lv2', 'Lv3', 'Lv4'];
-                const levelStr = trustLevel !== undefined ? (levels[trustLevel] || `Lv${trustLevel}`) : 'Lv-';
-                const timeMinutes = Math.floor((s.time_read || 0) / 60);
-                const timeDisplay = timeMinutes >= 60 ? `${(timeMinutes / 60).toFixed(1)}时` : `${timeMinutes}分`;
-                const clean = (val) => String(val || '').replace(/\s+/g, '');
-                const checkRatio = (valStr) => {
-                    if (!valStr || !valStr.includes('/')) return null;
-                    const [c, r] = valStr.split('/').map(v => parseFloat(v));
-                    return (!isNaN(c) && !isNaN(r)) ? c >= r : null;
+                
+                const stats = summary?.user_summary || {}, format = (value) => String(value || '').replace(/\s+/g, '');
+                const verify = (string) => {
+                    if (!string || !string.includes('/')) return null; const [current, required] = string.split('/').map(value => parseFloat(value)); return (!isNaN(current) && !isNaN(required)) ? current >= required : null;
                 };
-                const likedDays = clean(connectData?.likedDays) || '-';
-                const likedUsers = clean(connectData?.likedUsers) || '-';
-                const flaggedVal = clean(connectData?.flagged) || '0/5';
-                const flaggedUsersVal = clean(connectData?.flaggedUsers) || '0/5';
-                const silencedVal = clean(connectData?.silenced) || '0';
-                const suspendedVal = clean(connectData?.suspended) || '0';
+                
+                const days = format(connect?.days) || '-', users = format(connect?.users) || '-';
+                const flagged = format(connect?.flagged) || '0/5', reporters = format(connect?.reporters) || '0/5';
+                const silenced = format(connect?.silenced) || '0', suspended = format(connect?.suspended) || '0';
+                
                 list.innerHTML = `
-                    <div class="lda-grid-item"><span>等级</span><span class="lda-val">${levelStr}</span></div>
-                    <div class="lda-grid-item"><span>时长</span><span class="lda-val">${timeDisplay}</span></div>
-                    <div class="lda-grid-item"><span>访问天数</span><span class="lda-val">${s.days_visited || 0}</span></div>
-                    <div class="lda-grid-item"><span>浏览帖子</span><span class="lda-val">${s.posts_read_count || 0}</span></div>
-                    <div class="lda-grid-item"><span>浏览话题</span><span class="lda-val">${s.topics_entered || 0}</span></div>
-                    <div class="lda-grid-item"><span>点赞</span><span class="lda-val">${s.likes_given || 0}</span></div>
-                    <div class="lda-grid-item"><span>获赞</span><span class="lda-val">${s.likes_received || 0}</span></div>
-                    <div class="lda-grid-item"><span>回复话题</span><span class="lda-val">${s.post_count || me.post_count || 0}</span></div>
-                    <div class="lda-grid-item"><span>获赞天数</span><span class="lda-val" style="${checkRatio(likedDays) === false ? 'color:#f59e0b' : ''}">${likedDays}</span></div>
-                    <div class="lda-grid-item"><span>获赞用户</span><span class="lda-val" style="${checkRatio(likedUsers) === false ? 'color:#f59e0b' : ''}">${likedUsers}</span></div>
-                    <div class="lda-grid-item"><span>被举报帖子</span><span class="lda-val" style="${parseInt(flaggedVal, 10) > 0 ? 'color:#ef4444' : ''}">${flaggedVal}</span></div>
-                    <div class="lda-grid-item"><span>举报用户</span><span class="lda-val" style="${parseInt(flaggedUsersVal, 10) > 0 ? 'color:#ef4444' : ''}">${flaggedUsersVal}</span></div>
-                    <div class="lda-grid-item"><span>被禁言</span><span class="lda-val" style="${parseInt(silencedVal, 10) > 0 ? 'color:#ef4444' : ''}">${silencedVal}</span></div>
-                    <div class="lda-grid-item"><span>被封禁</span><span class="lda-val" style="${parseInt(suspendedVal, 10) > 0 ? 'color:#ef4444' : ''}">${suspendedVal}</span></div>
+                    <div class="lda-grid-item"><span>等级</span><span class="lda-val">Lv${profile.trust_level ?? stats.trust_level ?? '-'}</span></div>
+                    <div class="lda-grid-item"><span>时长</span><span class="lda-val">${Math.floor((stats.time_read || 0) / 60)}分</span></div>
+                    <div class="lda-grid-item"><span>访问天数</span><span class="lda-val">${stats.days_visited || 0}</span></div>
+                    <div class="lda-grid-item"><span>浏览帖子</span><span class="lda-val">${stats.posts_read_count || 0}</span></div>
+                    <div class="lda-grid-item"><span>浏览话题</span><span class="lda-val">${stats.topics_entered || 0}</span></div>
+                    <div class="lda-grid-item"><span>点赞</span><span class="lda-val">${stats.likes_given || 0}</span></div>
+                    <div class="lda-grid-item"><span>获赞</span><span class="lda-val">${stats.likes_received || 0}</span></div>
+                    <div class="lda-grid-item"><span>回复话题</span><span class="lda-val">${stats.post_count || profile.post_count || 0}</span></div>
+                    <div class="lda-grid-item"><span>获赞天数</span><span class="lda-val" style="${verify(days) === false ? 'color:#f59e0b' : ''}">${days}</span></div>
+                    <div class="lda-grid-item"><span>获赞用户</span><span class="lda-val" style="${verify(users) === false ? 'color:#f59e0b' : ''}">${users}</span></div>
+                    <div class="lda-grid-item"><span>被举报帖子</span><span class="lda-val" style="${parseInt(flagged, 10) > 0 ? 'color:#ef4444' : ''}">${flagged}</span></div>
+                    <div class="lda-grid-item"><span>举报用户</span><span class="lda-val" style="${parseInt(reporters, 10) > 0 ? 'color:#ef4444' : ''}">${reporters}</span></div>
+                    <div class="lda-grid-item"><span>被禁言</span><span class="lda-val" style="${parseInt(silenced, 10) > 0 ? 'color:#ef4444' : ''}">${silenced}</span></div>
+                    <div class="lda-grid-item"><span>被封禁</span><span class="lda-val" style="${parseInt(suspended, 10) > 0 ? 'color:#ef4444' : ''}">${suspended}</span></div>
                 `;
-                btn.innerText = '刷新';
-                this.userLoaded = true;
-            } catch (err) {
-                list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">获取失败: ${err.message || '网络错误'}</div>`;
-                btn.innerText = '重试';
-            } finally {
-                btn.disabled = false;
-            }
+                button.innerText = '刷新';
+            } catch (error) { list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">获取失败: ${error.message}</div>`; button.innerText = '重试'; } finally { button.disabled = false; }
         }
-        loadCreditInfo() {
-            const btn = document.getElementById('lda-fetch-credit');
-            const list = document.getElementById('lda-credit-list');
-            btn.disabled = true;
+        
+        credit() {
+            const button = document.getElementById('lda-fetch-credit'), list = document.getElementById('lda-credit-list'); button.disabled = true;
             GM_xmlhttpRequest({
-                method: 'GET',
-                url: 'https://credit.linux.do/api/v1/oauth/user-info',
-                timeout: 10000,
-                responseType: 'json',
-                onload: (res) => {
-                    btn.disabled = false;
-                    if (res.status === 200 && res.response?.data) {
-                        const d = res.response.data;
+                method: 'GET', url: 'https://credit.linux.do/api/v1/oauth/user-info', timeout: 5000, responseType: 'json',
+                onload: (response) => {
+                    button.disabled = false; const data = response.response?.data;
+                    if (response.status === 200 && data) {
                         list.innerHTML = `
-                            <div class="lda-grid-item"><span>可用积分</span><span class="lda-val" style="color:#0d9488">${d.available_balance || 0}</span></div>
-                            <div class="lda-grid-item"><span>社区积分</span><span class="lda-val">${d.community_balance || 0}</span></div>
-                            <div class="lda-grid-item"><span>累计收入</span><span class="lda-val">+${d.total_receive || 0}</span></div>
-                            <div class="lda-grid-item"><span>累计支出</span><span class="lda-val">-${d.total_payment || 0}</span></div>
+                            <div class="lda-grid-item"><span>可用积分</span><span class="lda-val" style="color:#0d9488">${data.available_balance || 0}</span></div>
+                            <div class="lda-grid-item"><span>社区积分</span><span class="lda-val">${data.community_balance || 0}</span></div>
+                            <div class="lda-grid-item"><span>累计收入</span><span class="lda-val">+${data.total_receive || 0}</span></div>
+                            <div class="lda-grid-item"><span>累计支出</span><span class="lda-val">-${data.total_payment || 0}</span></div>
                         `;
-                        btn.innerText = '刷新';
-                        this.creditLoaded = true;
-                    } else if (res.status === 401 || res.status === 403) {
-                        list.innerHTML = `<div class="lda-empty-tip"><a href="https://credit.linux.do" target="_blank" style="color:#0d9488">前往 credit.linux.do 登录</a></div>`;
-                        btn.innerText = '未登录';
-                    } else {
-                        list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">获取失败(${res.status})</div>`;
-                        btn.innerText = '重试';
-                    }
+                        button.innerText = '刷新';
+                    } else { list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">获取失败</div>`; button.innerText = '重试'; }
                 },
-                onerror: () => {
-                    btn.disabled = false;
-                    list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">请求错误</div>`;
-                    btn.innerText = '重试';
-                },
-                ontimeout: () => {
-                    btn.disabled = false;
-                    list.innerHTML = `<div class="lda-empty-tip" style="color:#ef4444">请求超时</div>`;
-                    btn.innerText = '重试';
-                }
+                onerror: () => { button.disabled = false; button.innerText = '重试'; }
             });
         }
+        
         status(state) {
-            const active = state === '运行';
-            const isPaused = state.includes('暂停');
+            const active = state === '运行', paused = state.includes('暂停');
             this.box.classList.toggle('active-run', active);
-            this.executeBtn.className = `lda-button ${active ? 'stop' : (isPaused ? 'pause' : 'start')}`;
-            this.executeBtn.innerText = isPaused ? '暂停' : (active ? `已读: ${sessionStorage.getItem('lda_count') || 0}` : '开始');
+            this.button.className = `lda-button ${active ? 'stop' : (paused ? 'pause' : 'start')}`;
+            this.button.innerText = paused ? '暂停' : (active ? `已读: ${sessionStorage.getItem('lda_count') || 0}` : '开始');
         }
+        
         cooldown() {
             const label = document.getElementById('lda-threshold-label');
-            if (label) {
-                const isCooldown = GM_getValue('lda_cooldown', 0) > Date.now();
-                label.style.color = isCooldown ? '#ef4444' : '';
-                label.innerText = isCooldown ? '点赞上限' : '点赞阈值';
-            }
+            if (label) { const cooling = GM_getValue('lda_cooldown', 0) > Date.now(); label.style.color = cooling ? '#ef4444' : ''; label.innerText = cooling ? '点赞上限' : '点赞阈值'; }
         }
-        updateReadCount(count) {
-            if (this.executeBtn.classList.contains('stop') && !this.executeBtn.classList.contains('pause')) {
-                this.executeBtn.innerText = `已读: ${count}`;
-            }
-        }
+        
+        update(count) { if (this.button.classList.contains('stop') && !this.button.classList.contains('pause')) this.button.innerText = `已读: ${count}`; }
     }
 
-    const ui = new UI();
-    Interceptor.init(ui);
-    const runner = new Runner(new Liker(ui), ui);
-    Interceptor.runner = runner;
-    ui.executeBtn.onclick = () => {
-        if (runner.active) { runner.stop('停止'); return; }
-        const until = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
-        if (until > Date.now()) { runner.stop('停止 - 限流'); return; }
+    const view = new View(); Interceptor.setup(view); const runner = new Runner(new Liker(view), view); Interceptor.runner = runner;
+    view.button.onclick = () => {
+        if (runner.active) return runner.stop('停止');
+        if (parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10) > Date.now()) return runner.stop('停止 - 限流');
         runner.start();
     };
 })();
