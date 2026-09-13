@@ -1,13 +1,12 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      2.2.0
+// @version      2.3.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
 // @match        https://linux.do/*
 // @match        https://idcflare.com/*
-// @match        https://challenges.cloudflare.com/*
 // @icon         https://www.google.com/s2/favicons?domain=linux.do
 // @grant        GM_addStyle
 // @grant        GM_setValue
@@ -22,23 +21,6 @@
 // ==/UserScript==
 (function () {
     'use strict';
-    if (location.host === 'challenges.cloudflare.com') {
-        const solve = () => {
-            const box = document.querySelector('input[type="checkbox"], .ctp-checkbox-label, #challenge-stage input');
-            if (box) {
-                box.click();
-                return true;
-            }
-            return false;
-        };
-        if (!solve()) {
-            const obs = new MutationObserver(() => {
-                if (solve()) obs.disconnect();
-            });
-            obs.observe(document.documentElement, { childList: true, subtree: true });
-        }
-        return;
-    }
     if (window.__ldaBooted) return;
     window.__ldaBooted = true;
     const Tool = {
@@ -186,25 +168,27 @@
             this.ui = ui;
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const isLike = (u) => /toggle\.json|custom-reactions|discourse-reactions|post_actions/.test(String(u));
+            const isCF = (u) => /challenges\.cloudflare\.com|cdn-cgi\/challenge-platform|turnstile/.test(String(u));
             const origFetch = win.fetch;
-            win.fetch = async (...args) => {
+            win.fetch = async function(...args) {
                 const urlStr = String(args[0]?.url || args[0]);
+                if (isCF(urlStr)) return origFetch.apply(this, args);
                 const isLikeUrl = isLike(urlStr);
                 let res;
                 try {
-                    res = await origFetch.apply(win, args);
+                    res = await origFetch.apply(this, args);
                 } catch (e) {
-                    this.pause(null, isLikeUrl);
+                    Interceptor.pause(null, isLikeUrl);
                     throw e;
                 }
                 if (!res.ok) {
                     let d = null;
                     try { d = await res.clone().json(); } catch (_) {}
-                    this.pause(res, isLikeUrl, d);
+                    Interceptor.pause(res, isLikeUrl, d);
                 } else if (isLikeUrl) {
                     try {
                         const d = await res.clone().json();
-                        if (d?.error_type || d?.errors) this.pause(res, true, d);
+                        if (d?.error_type || d?.errors) Interceptor.pause(res, true, d);
                     } catch (_) {}
                 }
                 return res;
@@ -216,6 +200,7 @@
                 return origOpen.apply(this, arguments); 
             };
             win.XMLHttpRequest.prototype.send = function(...args) {
+                if (isCF(this._u)) return origSend.apply(this, args);
                 this.addEventListener('load', function() {
                     const isLikeUrl = isLike(this._u);
                     let hasError = this.status >= 400 || this.status === 0;
