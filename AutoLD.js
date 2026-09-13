@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      2.8.0
+// @version      2.9.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -23,10 +23,59 @@
     'use strict';
     if (window.__ldaBooted) return;
     window.__ldaBooted = true;
+
+    const Logger = {
+        el: null,
+        init(el) {
+            this.el = el;
+            this.render();
+        },
+        getLogs() {
+            try {
+                return JSON.parse(sessionStorage.getItem('lda_logs') || '[]');
+            } catch (_) {
+                return [];
+            }
+        },
+        createLine(item) {
+            const line = document.createElement('div');
+            line.className = 'lda-log-line';
+            line.innerHTML = `<span class="lda-log-time">[${item.time}]</span><span class="lda-log-text">${item.text}</span>`;
+            return line;
+        },
+        log(msg) {
+            const time = new Date().toTimeString().split(' ')[0];
+            const item = { time, text: String(msg) };
+            const logs = this.getLogs();
+            logs.push(item);
+            if (logs.length > 80) logs.shift();
+            try {
+                sessionStorage.setItem('lda_logs', JSON.stringify(logs));
+            } catch (_) {}
+            this.append(item);
+        },
+        append(item) {
+            if (!this.el) return;
+            this.el.querySelector('.lda-empty-tip')?.remove();
+            this.el.appendChild(this.createLine(item));
+            this.el.scrollTop = this.el.scrollHeight;
+        },
+        render() {
+            if (!this.el) return;
+            const logs = this.getLogs();
+            this.el.innerHTML = logs.length ? '' : '<div class="lda-empty-tip">暂无日志</div>';
+            logs.forEach(item => this.el.appendChild(this.createLine(item)));
+            this.el.scrollTop = this.el.scrollHeight;
+        },
+        clear() {
+            sessionStorage.removeItem('lda_logs');
+            if (this.el) this.el.innerHTML = '<div class="lda-empty-tip">暂无日志</div>';
+        }
+    };
+
     const Tool = {
         wait: async (ms, r) => {
-            const target = ms ?? Tool.rand(500, 2000);
-            const start = Date.now();
+            const target = ms ?? Tool.rand(500, 2000), start = Date.now();
             while (Date.now() - start < target) {
                 if (r && !r.active) return false;
                 await new Promise(res => setTimeout(res, Math.min(500, target - (Date.now() - start))));
@@ -55,15 +104,18 @@
             return c ? (c.textContent?.length || 0) + (c.querySelectorAll('img, video, iframe').length * 80) : 0;
         }
     };
+
     const Stealth = {
         audioCtx: null,
         heartbeatTimer: null,
         pokeDiscourse() {
             try {
+                if (!Tool.topic()) return;
                 const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
                 const c = win.Discourse?.__container__;
-                if (!c?.lookup?.('controller:topic')?.model?.id) return;
-                const st = c.lookup?.('service:screen-track');
+                const topicId = Number(c?.lookup?.('controller:topic')?.model?.id || Tool.identity());
+                if (!topicId || isNaN(topicId) || topicId <= 0) return;
+                const st = c?.lookup?.('service:screen-track');
                 st?.start?.();
                 st?.scrolled?.();
             } catch (_) {}
@@ -100,6 +152,7 @@
         },
         click(el) { el?.click(); }
     };
+
     const Interceptor = {
         ui: null,
         runner: null,
@@ -110,38 +163,29 @@
                 else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
             }, Tool.rand(500, 2000));
         },
-        pause(res, isLike = false, data = null) {
-            if (res?.status === 403 && !data) {
-                const t403 = Date.now();
-                const timer403 = setInterval(() => {
-                    if (Date.now() - t403 >= 5000) {
-                        clearInterval(timer403);
-                        if (!Tool.isCF()) location.reload();
-                    }
-                }, 500);
-                return;
-            }
-            let sec = 0;
+        getRetrySec(res, data) {
             const retryAfter = res?.headers?.get?.('Retry-After') || res?.getResponseHeader?.('Retry-After');
             if (retryAfter) {
                 const n = parseInt(retryAfter, 10);
-                if (n > 0) sec = n;
+                if (n > 0) return n;
             }
-            if (!sec && data?.extras?.wait_seconds) {
+            if (data?.extras?.wait_seconds) {
                 const n = parseInt(data.extras.wait_seconds, 10);
-                if (n > 0) sec = n;
+                if (n > 0) return n;
             }
+            return 0;
+        },
+        handleError(url, status, res = null, data = null, isLike = false) {
+            const errDetail = data?.errors?.join?.(', ') || data?.error_type || (typeof data === 'string' ? data : '');
+            const urlShort = String(url).replace(location.origin, '').split('?')[0];
+            Logger.log(`接口报错 [${status || 'ERR'}]: ${urlShort}${errDetail ? ` (${errDetail})` : ''}`);
+            let sec = this.getRetrySec(res, data);
             if (!sec) sec = isLike ? 86400 : 300;
             if (isLike) {
                 GM_setValue('lda_cooldown', Date.now() + sec * 1000);
-                if (this.ui) {
-                    console.log(`点赞限流：剩余 ${sec} 秒`);
-                    this.ui.cooldown();
-                }
+                this.ui?.cooldown();
                 this.closePopup();
-                return;
             }
-            console.log(`接口限流：暂停 ${Math.round(sec / 60)} 分钟`);
             this.runner?.pause(sec);
         },
         init(ui) {
@@ -158,17 +202,19 @@
                 try {
                     res = await origFetch.apply(this, args);
                 } catch (e) {
-                    Interceptor.pause(null, isLikeUrl);
+                    Interceptor.handleError(urlStr, 0, null, e.message || '网络异常', isLikeUrl);
                     throw e;
                 }
                 if (!res.ok) {
                     let d = null;
                     try { d = await res.clone().json(); } catch (_) {}
-                    Interceptor.pause(res, isLikeUrl, d);
+                    Interceptor.handleError(urlStr, res.status, res, d, isLikeUrl);
                 } else if (isLikeUrl) {
                     try {
                         const d = await res.clone().json();
-                        if (d?.error_type || d?.errors) Interceptor.pause(res, true, d);
+                        if (d?.error_type || d?.errors) {
+                            Interceptor.handleError(urlStr, res.status, res, d, true);
+                        }
                     } catch (_) {}
                 }
                 return res;
@@ -181,23 +227,29 @@
             };
             win.XMLHttpRequest.prototype.send = function (...args) {
                 if (isCF(this._u)) return origSend.apply(this, args);
+                const u = this._u;
                 this.addEventListener('load', function () {
-                    const isLikeUrl = isLike(this._u);
-                    let hasError = this.status >= 400 || this.status === 0;
-                    let d = null;
-                    try {
-                        d = JSON.parse(this.responseText);
-                        if (d?.error_type || d?.errors) hasError = true;
-                    } catch (_) {}
-                    if (hasError) Interceptor.pause(this, isLikeUrl, d);
+                    const isLikeUrl = isLike(u);
+                    if (this.status >= 400) {
+                        let d = null;
+                        try { d = JSON.parse(this.responseText); } catch (_) {}
+                        Interceptor.handleError(u, this.status, this, d, isLikeUrl);
+                    } else if (isLikeUrl) {
+                        let d = null;
+                        try { d = JSON.parse(this.responseText); } catch (_) {}
+                        if (d?.error_type || d?.errors) {
+                            Interceptor.handleError(u, this.status, this, d, true);
+                        }
+                    }
                 });
                 this.addEventListener('error', function () {
-                    Interceptor.pause(this, isLike(this._u));
+                    Interceptor.handleError(u, 0, this, '网络异常', isLike(u));
                 });
                 return origSend.apply(this, args);
             };
         }
     };
+
     class Liker {
         constructor(ui) {
             this.ui = ui;
@@ -237,11 +289,12 @@
                 if (!btn) continue;
                 this.processedPosts.add(postKey);
                 Stealth.click(btn);
-                console.log(`自动点赞：第 ${post.getAttribute('data-post-number') || postKey} 楼`);
+                Logger.log(`自动点赞：第 ${post.getAttribute('data-post-number') || postKey} 楼`);
                 if (!(await Tool.wait(Tool.rand(500, 2000), runner))) return;
             }
         }
     }
+
     class Runner {
         constructor(liker, ui) {
             this.liker = liker;
@@ -267,7 +320,15 @@
                     }
                 }
             }, 2000);
-            if (this.active) {
+            const pauseUntil = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
+            if (pauseUntil > Date.now()) {
+                this.ui.status('暂停');
+                setTimeout(() => {
+                    sessionStorage.removeItem('lda_pause_until');
+                    Logger.log('解除限流：恢复运行');
+                    this.start();
+                }, pauseUntil - Date.now());
+            } else if (this.active) {
                 if (!sessionStorage.getItem('lda_start_time')) {
                     sessionStorage.setItem('lda_start_time', String(Date.now()));
                 }
@@ -334,19 +395,24 @@
             sessionStorage.removeItem('lda_start_time');
             this.ui.status('停止');
             Stealth.suspendKeepAlive();
-            if (reason) console.log(`停止：${reason}`);
+            if (reason) Logger.log(`停止：${reason}`);
         }
         pause(sec) {
-            if (!this.active) return;
             const ms = sec * 1000;
-            this.stop('达到限流');
+            this.active = false;
+            this.moving = false;
+            this.currentTopicId = null;
+            this.liker.reset();
+            this.resetPacing();
             sessionStorage.setItem('lda_pause_until', String(Date.now() + ms));
             this.ui.status('暂停');
+            Stealth.suspendKeepAlive();
+            Logger.log(`暂停运行：${Math.round(sec / 60) || sec}${sec >= 60 ? '分钟' : '秒'}`);
             setTimeout(() => {
                 const until = parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10);
                 if (until && Date.now() >= until) {
                     sessionStorage.removeItem('lda_pause_until');
-                    console.log('解除限流：恢复运行');
+                    Logger.log('解除限流：恢复运行');
                     this.start();
                 }
             }, ms);
@@ -402,7 +468,7 @@
                     return;
                 }
             }
-            console.log(`开始阅读：${Tool.title()}`);
+            Logger.log(`开始阅读：${Tool.title()}`);
             await this.liker.execute(this);
             let lastScrollY = -1;
             let bottomStuckCount = 0;
@@ -566,6 +632,7 @@
             this.moving = false;
         }
     }
+
     class UI {
         constructor() {
             this.userLoaded = false;
@@ -619,6 +686,7 @@
                 .lda-button{width:100%;height:32px;border:none;border-radius:10px;font-weight:600;cursor:pointer;color:#fff;font-size:13px;transition:all .2s;display:flex;align-items:center;justify-content:center}
                 .lda-button.start{background:linear-gradient(135deg,#06b6d4,#0d9488)}
                 .lda-button.stop{background:linear-gradient(135deg,#14b8a6,#10b981)}
+                .lda-button.pause{background:linear-gradient(135deg,#f59e0b,#d97706)}
                 #lda-threshold-label{cursor:pointer;user-select:none}
                 details summary::-webkit-details-marker, details summary::marker{display:none !important}
                 details summary{list-style:none;outline:none}
@@ -630,6 +698,12 @@
                 .lda-grid-item{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#334155;line-height:1.4}
                 .lda-grid-item .lda-val{font-weight:600;color:#0f766e;margin-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
                 .lda-empty-tip{grid-column:span 2;text-align:center;color:#94a3b8;font-size:11px;padding:4px 0}
+                #lda-log-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 8px;font-size:11px;color:#475569;max-height:100px;overflow-y:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;display:flex;flex-direction:column;gap:3px;word-break:break-all;box-sizing:border-box}
+                #lda-log-box::-webkit-scrollbar{width:4px}
+                #lda-log-box::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:2px}
+                .lda-log-line{line-height:1.35}
+                .lda-log-time{color:#94a3b8;margin-right:4px}
+                .lda-log-text{color:#334155}
             `);
         }
         construct() {
@@ -668,6 +742,15 @@
                                 <div class="lda-row" title="手动进行 CF 验证"><span>CF 验证</span><div class="lda-ctrl"><button id="lda-cf-btn" class="lda-inp" style="cursor:pointer">验证</button></div></div>
                             </div>
                         </details>
+                        <details style="width:100%" id="lda-log-detail" open>
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起">
+                                <span>运行日志</span>
+                                <div class="lda-ctrl">
+                                    <button class="lda-action-btn" id="lda-clear-log">清空</button>
+                                </div>
+                            </summary>
+                            <div id="lda-log-box"></div>
+                        </details>
                     </div>
                     <div class="lda-extra-group">
                         <details style="width:100%" id="lda-user-info-detail">
@@ -695,6 +778,7 @@
                     </div>
                 </div>`;
             document.body.appendChild(this.box);
+            Logger.init(document.getElementById('lda-log-box'));
         }
         events() {
             this.box.onclick = () => {
@@ -723,6 +807,10 @@
                 } else {
                     Stealth.suspendKeepAlive();
                 }
+            };
+            document.getElementById('lda-clear-log').onclick = (e) => {
+                e.stopPropagation();
+                Logger.clear();
             };
             document.getElementById('lda-cf-btn').onclick = (e) => {
                 e.stopPropagation();
@@ -942,9 +1030,10 @@
         }
         status(state) {
             const active = state === '运行';
+            const isPaused = state.includes('暂停');
             this.box.classList.toggle('active-run', active);
-            this.executeBtn.className = `lda-button ${active ? 'stop' : (state.includes('暂停') ? 'stop' : 'start')}`;
-            this.executeBtn.innerText = active ? `已读: ${sessionStorage.getItem('lda_count') || 0}` : (state.includes('暂停') ? state : '开始');
+            this.executeBtn.className = `lda-button ${active ? 'stop' : (isPaused ? 'pause' : 'start')}`;
+            this.executeBtn.innerText = isPaused ? '暂停' : (active ? `已读: ${sessionStorage.getItem('lda_count') || 0}` : '开始');
         }
         cooldown() {
             const label = document.getElementById('lda-threshold-label');
@@ -955,11 +1044,12 @@
             }
         }
         updateReadCount(count) {
-            if (this.executeBtn.classList.contains('stop') && !this.executeBtn.innerText.includes('暂停')) {
+            if (this.executeBtn.classList.contains('stop') && !this.executeBtn.classList.contains('pause')) {
                 this.executeBtn.innerText = `已读: ${count}`;
             }
         }
     }
+
     const ui = new UI();
     Interceptor.init(ui);
     const runner = new Runner(new Liker(ui), ui);
