@@ -1,9 +1,9 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      3.2.0
+// @version      3.3.0
 // @author       YisRime
-// @description  Linux Do 辅助工具：一键查询 Connect 与 Credits；自动阅读与点赞帖子，支持后台保活；只看楼主、一键回复与直达一楼。
+// @description  Linux Do 小助手：支持自动阅读与点赞，直跳外链、只看楼主、去模糊/盘古化，并支持一键查询升级指标与积分资产。
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
 // @match        https://linux.do/*
@@ -22,8 +22,9 @@
 // ==/UserScript==
 (function () {
     'use strict';
-    if (window.__ldaBooted) return;
-    window.__ldaBooted = true;
+    const globalContext = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    if (globalContext.__ldaBooted) return;
+    globalContext.__ldaBooted = true;
 
     const Logger = {
         element: null,
@@ -142,6 +143,328 @@
                 }
                 return response;
             };
+        }
+    };
+
+    const Patch = {
+        watcher: null,
+        _bypassBound: false,
+
+        space(text) {
+            if (!text || typeof text !== 'string') return text;
+            return text
+                .replace(/([\u4e00-\u9fa5\u3040-\u30FF])([a-zA-Z0-9_\+\=\@\$\%\^\&\*\-\+\/\\])/g, '$1 $2')
+                .replace(/([a-zA-Z0-9_\+\=\@\$\%\^\&\*\-\+\/\\])([\u4e00-\u9fa5\u3040-\u30FF])/g, '$1 $2')
+                .replace(/([\u4e00-\u9fa5\u3040-\u30FF])([(\[<])/g, '$1 $2')
+                .replace(/([)\]>])([\u4e00-\u9fa5\u3040-\u30FF])/g, '$1 $2');
+        },
+
+        typeset(node) {
+            if (!node || node.dataset.panguApplied === 'true') return;
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
+                acceptNode: (item) => {
+                    const tag = item.parentNode?.tagName?.toLowerCase();
+                    return ['script', 'style', 'code', 'pre', 'textarea'].includes(tag) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+                }
+            });
+            const list = [];
+            while (walker.nextNode()) list.push(walker.currentNode);
+            for (const item of list) {
+                const after = this.space(item.nodeValue);
+                if (after !== item.nodeValue) item.nodeValue = after;
+            }
+            node.dataset.panguApplied = 'true';
+        },
+
+        editor() {
+            const input = document.querySelector('.d-editor-input');
+            if (!input) return;
+            const original = input.value, formatted = this.space(original);
+            if (original === formatted) return;
+            input.focus();
+            if (!document.execCommand('insertText', false, formatted)) {
+                input.setRangeText(formatted, 0, input.value.length, 'end');
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        },
+
+        button() {
+            if (!GM_getValue('lda_opt_typeset', false)) {
+                document.querySelector('.pangutext')?.remove();
+                return;
+            }
+            const target = document.querySelector('.save-or-cancel .cancel, .save-or-cancel .create');
+            if (target && !document.querySelector('.pangutext')) {
+                const btn = document.createElement('button');
+                btn.className = 'btn discard-button btn-transparent pangutext';
+                btn.type = 'button';
+                btn.title = '格式化';
+                btn.innerHTML = '<span class="d-button-label">格式化</span>';
+                btn.onclick = (e) => { e.preventDefault(); Patch.editor(); };
+                target.parentNode.insertBefore(btn, target.nextSibling);
+            }
+        },
+
+        format(stamp) {
+            const date = new Date(stamp), now = new Date();
+            const zero = (n) => String(n).padStart(2, '0');
+            const h = zero(date.getHours()), m = zero(date.getMinutes());
+            if (now.toDateString() === date.toDateString()) return `${h}:${m}`;
+            const month = zero(date.getMonth() + 1), day = zero(date.getDate());
+            if (now.getFullYear() === date.getFullYear()) return `${month}/${day} ${h}:${m}`;
+            return `${date.getFullYear()}/${month}/${day} ${h}:${m}`;
+        },
+
+        stamp(node) {
+            if (!node || node.dataset.createdTimeDone) return;
+            const date = node.querySelector('.relative-date');
+            const time = date ? Number(date.dataset.time) : null;
+            if (!time) return;
+
+            const diff = Date.now() - time, day = 86400000;
+            let color = '#94a3b8';
+            if (diff < day) color = '#34d399';
+            else if (diff < day * 7) color = '#10b981';
+            else if (diff < day * 30) color = '#047857';
+
+            const target = node.querySelector('.post-activity') || node;
+            const text = document.createElement('span');
+            text.className = 'linuxtime';
+            text.style.color = color;
+            text.textContent = `（${this.format(time)}）`;
+            target.appendChild(text);
+            node.dataset.createdTimeDone = 'true';
+        },
+
+        inject(style) {
+            const key = 'linuxdo-scripts-custom-css';
+            let tag = document.getElementById(key);
+            if (!style) { if (tag) tag.remove(); return; }
+            if (!tag) {
+                tag = document.createElement('style');
+                tag.id = key;
+                document.head.appendChild(tag);
+            }
+            tag.textContent = style;
+        },
+
+        freeze(image) {
+            if (!image || image.dataset.gifFrozen) return;
+            const path = image.getAttribute('src');
+            if (!path || !path.toLowerCase().includes('.gif')) return;
+
+            image.dataset.gifFrozen = 'true';
+            const clone = new Image();
+            clone.crossOrigin = 'anonymous';
+            clone.src = path;
+            clone.onload = () => {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = clone.naturalWidth || image.width || 45;
+                    canvas.height = clone.naturalHeight || image.height || 45;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(clone, 0, 0, canvas.width, canvas.height);
+                    image.src = canvas.toDataURL('image/png');
+                } catch {}
+            };
+        },
+
+        purge() {
+            if (!GM_getValue('lda_opt_purge', false)) return;
+            const isWelfare = /welfare|36/.test(location.pathname) || Boolean(document.querySelector('.category-breadcrumb .badge-category__name')?.textContent?.includes('福利羊毛'));
+
+            document.querySelectorAll('.topic-list-item').forEach(el => {
+                const match = isWelfare || Boolean(el.querySelector('.badge-category__name')?.textContent?.includes('福利羊毛'));
+                if (!match) return;
+                const closed = el.classList.contains('closed') || Boolean(el.querySelector('.d-icon-lock'));
+                const title = el.querySelector('a.title, .raw-topic-link')?.textContent || '';
+                if (closed || /已?(?:无|完|出|送|关|结)/.test(title)) {
+                    el.style.setProperty('display', 'none', 'important');
+                }
+            });
+        },
+
+        mute(element) {
+            if (element.dataset.autoplayDisabled) return;
+            if (element.tagName === 'VIDEO') {
+                element.autoplay = false;
+                element.removeAttribute('autoplay');
+                element.pause();
+                element.dataset.autoplayDisabled = 'true';
+            } else if (element.tagName === 'IFRAME') {
+                const src = element.getAttribute('src');
+                if (!src) return;
+                try {
+                    const url = new URL(src, location.origin);
+                    if (url.searchParams.get('autoplay') !== 'false' && url.searchParams.get('autoplay') !== '0') {
+                        url.searchParams.set('autoplay', 'false');
+                        element.src = url.toString();
+                    }
+                    element.dataset.autoplayDisabled = 'true';
+                } catch {}
+            }
+        },
+
+        clarify(state) {
+            const key = 'linuxdo-filter-spoiler-style';
+            let tag = document.getElementById(key);
+            if (state) {
+                if (!tag) {
+                    tag = document.createElement('style');
+                    tag.id = key;
+                    tag.textContent = `.spoiled, .spoiled *, .spoiler, .spoiler * { filter: none !important; opacity: 1 !important; }`;
+                    document.head.appendChild(tag);
+                }
+            } else if (tag) tag.remove();
+        },
+
+        tip(target, text) {
+            if (!target) return;
+            target.title = text;
+            let pop = target.parentElement?.querySelector('.lda-pop-tip');
+            if (!pop && target.parentElement) {
+                pop = document.createElement('div');
+                pop.className = 'lda-pop-tip';
+                target.parentElement.style.position = 'relative';
+                target.parentElement.appendChild(pop);
+            }
+            if (pop) {
+                pop.textContent = text;
+                pop.classList.add('show');
+                clearTimeout(target._tiptimer);
+                target._tiptimer = setTimeout(() => pop.classList.remove('show'), 4000);
+            }
+        },
+
+        async floors(btn) {
+            const ident = Tool.identity();
+            if (!ident) return;
+            const ctx = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            const user = ctx.Discourse?.User?.current()?.username || ctx.Discourse?.__container__?.lookup?.('service:current-user')?.username;
+
+            try {
+                let page = 1, collection = [], more = true;
+                while (more) {
+                    const res = await fetch(`/t/${ident}.json?username_filters=${encodeURIComponent(user)}&page=${page}`);
+                    if (!res.ok) break;
+                    const result = await res.json();
+                    const list = result.post_stream?.posts || [];
+                    list.forEach(p => { if (p.post_number > 1) collection.push(p.post_number); });
+                    if (list.length < 20) more = false; else page++;
+                    if (page > 15) break;
+                }
+                const msg = collection.length ? `共 ${collection.length} 条回复: ${collection.join(', ')} 楼` : '暂无回复';
+                this.tip(btn, msg);
+            } catch {
+                this.tip(btn, '查询失败');
+            }
+        },
+
+        control() {
+            if (!GM_getValue('lda_opt_floors', false)) {
+                document.querySelector('.lda-ownreply-btn')?.remove();
+                return;
+            }
+            const box = document.querySelector('.timeline-controls');
+            if (box && !document.querySelector('.lda-ownreply-btn')) {
+                const btn = document.createElement('button');
+                btn.className = 'btn no-text btn-icon icon btn-default lda-ownreply-btn';
+                btn.type = 'button';
+                btn.title = '查询我的回复';
+                btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
+                btn.onclick = () => Patch.floors(btn);
+                box.appendChild(btn);
+            }
+        },
+
+        bypass(e) {
+            if (!GM_getValue('lda_opt_bypass', false)) return;
+            const anchor = e?.target?.closest?.('a[href]');
+            if (!anchor) return;
+
+            try {
+                const url = new URL(anchor.href, location.origin);
+                if (url.protocol.startsWith('http') && url.host !== location.host) {
+                    e.stopPropagation();
+                }
+            } catch {}
+        },
+
+        setup() {
+            const cfg = {
+                typeset: GM_getValue('lda_opt_typeset', false),
+                stamp: GM_getValue('lda_opt_stamp', false),
+                freeze: GM_getValue('lda_opt_freeze', false),
+                purge: GM_getValue('lda_opt_purge', false),
+                mute: GM_getValue('lda_opt_mute', false),
+                clarify: GM_getValue('lda_opt_clarify', false),
+                floors: GM_getValue('lda_opt_floors', false),
+                bypass: GM_getValue('lda_opt_bypass', false),
+                style: GM_getValue('lda_opt_style', '')
+            };
+
+            this.inject(cfg.style);
+            this.clarify(cfg.clarify);
+
+            if (!this._bypassBound) {
+                window.addEventListener('click', (e) => this.bypass(e), true);
+                this._bypassBound = true;
+            }
+
+            if (cfg.typeset) {
+                document.querySelectorAll('.cooked, #topic-title h1').forEach(el => this.typeset(el));
+                this.button();
+            } else {
+                document.querySelector('.pangutext')?.remove();
+            }
+            if (cfg.stamp) document.querySelectorAll('.topic-list .age').forEach(el => this.stamp(el));
+            if (cfg.freeze) document.querySelectorAll('.post-avatar .avatar, .avatar-flair-preview .avatar, img.avatar').forEach(el => this.freeze(el));
+            if (cfg.purge) this.purge();
+            if (cfg.mute) document.querySelectorAll('.cooked video, .cooked iframe').forEach(el => this.mute(el));
+            if (cfg.floors) this.control(); else document.querySelector('.lda-ownreply-btn')?.remove();
+
+            if (this.watcher) this.watcher.disconnect();
+            this.watcher = new MutationObserver((mutations) => {
+                const active = {
+                    typeset: GM_getValue('lda_opt_typeset', false),
+                    stamp: GM_getValue('lda_opt_stamp', false),
+                    freeze: GM_getValue('lda_opt_freeze', false),
+                    purge: GM_getValue('lda_opt_purge', false),
+                    mute: GM_getValue('lda_opt_mute', false),
+                    floors: GM_getValue('lda_opt_floors', false),
+                    bypass: GM_getValue('lda_opt_bypass', false)
+                };
+
+                if (active.purge) this.purge();
+
+                for (const m of mutations) {
+                    for (const node of m.addedNodes) {
+                        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+
+                        if (active.typeset) {
+                            if (node.classList?.contains('cooked')) this.typeset(node);
+                            else node.querySelectorAll?.('.cooked').forEach(el => this.typeset(el));
+                        }
+                        if (active.stamp) {
+                            if (node.classList?.contains('age')) this.stamp(node);
+                            else node.querySelectorAll?.('.topic-list .age:not([data-created-time-done])').forEach(el => this.stamp(el));
+                        }
+                        if (active.freeze) {
+                            if (node.matches?.('.avatar')) this.freeze(node);
+                            else node.querySelectorAll?.('.avatar').forEach(el => this.freeze(el));
+                        }
+                        if (active.mute) {
+                            if (node.matches?.('video, iframe')) this.mute(node);
+                            else node.querySelectorAll?.('video, iframe').forEach(el => this.mute(el));
+                        }
+                    }
+                }
+
+                this.button();
+                this.control();
+            });
+
+            this.watcher.observe(document.body, { childList: true, subtree: true });
         }
     };
 
@@ -362,49 +685,51 @@
                 #lda-box.expanded { width:265px; height:auto; border-radius:16px; padding:12px; max-height:92vh; overflow-y:auto }
                 #lda-box.active-run { border-color:#5eead4; box-shadow:0 0 14px rgba(20,184,166,.4) }
                 #lda-panel-content { display:flex; flex-direction:column; gap:8px; font-family:-apple-system,BlinkMacSystemFont,sans-serif; width:100% }
-                #lda-header { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#64748b; height:16px; padding:0 2px }
-                #lda-header-title { font-weight:600; color:#0f766e }
-                #lda-header a { color:#0d9488; text-decoration:none }
+                #lda-header { display:flex; justify-content:space-between; align-items:center; font-size:11px; height:16px; padding:0 2px }
+                #lda-header a { font-weight:600; color:#0f766e; text-decoration:none }
                 #lda-bottom-bar { display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100%; height:32px }
                 #lda-gear { width:32px; height:32px; display:flex; align-items:center; justify-content:center; color:#0d9488; cursor:pointer; background:transparent; border:none; border-radius:8px }
-                #lda-box:not(.expanded) .lda-icon-close { display:none }
-                #lda-box.expanded .lda-icon-gear { display:none }
+                #lda-box .lda-icon-close, #lda-box.expanded .lda-icon-gear { display:none }
                 #lda-box.expanded .lda-icon-close { display:block }
                 #lda-box.expanded #lda-gear { background:#f0fdfa; border:1px solid #ccfbf1 }
                 #lda-box:not(.expanded) #lda-panel-content { gap:0 }
                 #lda-box:not(.expanded) #lda-bottom-bar { width:32px; height:32px; margin:0 auto }
                 #lda-box:not(.expanded) #lda-header, #lda-box:not(.expanded) .lda-group, #lda-box:not(.expanded) .lda-extra-group, #lda-box:not(.expanded) #lda-quick-settings { display:none !important }
-                .lda-group { display:flex; flex-direction:column; gap:6px; width:100% }
+                .lda-group, .lda-extra-group { display:flex; flex-direction:column; gap:6px; width:100% }
                 .lda-row { display:flex; justify-content:space-between; align-items:center; font-size:13px; color:#1e293b; height:26px }
                 .lda-ctrl { display:flex; align-items:center; justify-content:flex-end; width:64px }
                 .lda-inp { background:#f0fdfa; border:1px solid #99f6e4; color:#0f766e; border-radius:8px; padding:0 4px; font-size:12px; outline:none; text-align:center; width:64px; height:24px }
                 .lda-checkbox { cursor:pointer; width:16px; height:16px; accent-color:#0d9488; margin:0 }
-                .lda-button { width:100%; height:32px; border:none; border-radius:10px; font-weight:600; cursor:pointer; color:#fff; font-size:13px; display:flex; align-items:center; justify-content:center }
-                .lda-button.start { background:linear-gradient(135deg,#06b6d4,#0d9488) }
-                .lda-button.stop { background:linear-gradient(135deg,#14b8a6,#10b981) }
-                .lda-button.pause { background:linear-gradient(135deg,#f59e0b,#d97706) }
                 #lda-threshold-label { cursor:pointer }
-                details summary::-webkit-details-marker, details summary::marker { display:none !important }
-                details summary { list-style:none; outline:none }
-                details summary.lda-row { display:flex !important; justify-content:space-between !important; align-items:center !important; width:100% !important; height:26px !important }
-                .lda-extra-group { display:flex; flex-direction:column; gap:6px; width:100% }
+                #lda-box details summary { list-style:none; outline:none; cursor:pointer }
+                #lda-box details summary::-webkit-details-marker, #lda-box details summary::marker { display:none !important }
+                #lda-box details summary.lda-row { display:flex !important; justify-content:space-between !important; align-items:center !important; width:100% !important; height:26px !important }
                 .lda-action-btn { background:#f0fdfa; border:1px solid #99f6e4; color:#0f766e; border-radius:6px; padding:0 8px; font-size:11px; height:22px; cursor:pointer; line-height:20px; outline:none; white-space:nowrap }
-                .lda-action-btn.stop { background:linear-gradient(135deg,#14b8a6,#10b981); color:#fff; border:none; line-height:22px }
-                .lda-action-btn.pause { background:linear-gradient(135deg,#f59e0b,#d97706); color:#fff; border:none; line-height:22px }
+                .lda-action-btn.stop, .lda-action-btn.pause { color:#fff; border:none; line-height:22px }
+                .lda-action-btn.stop { background:linear-gradient(135deg,#14b8a6,#10b981) }
+                .lda-action-btn.pause { background:linear-gradient(135deg,#f59e0b,#d97706) }
                 .lda-grid-content { display:grid; grid-template-columns:1fr 1fr; gap:4px 8px; background:#f0fdfa; border:1px solid #ccfbf1; border-radius:8px; padding:6px 8px; margin-top:4px }
                 .lda-grid-item { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#334155 }
                 .lda-grid-item .lda-val { font-weight:600; color:#0f766e; margin-left:4px }
                 .lda-empty-tip { grid-column:span 2; text-align:center; color:#94a3b8; font-size:11px; padding:4px 0 }
                 #lda-log-box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:6px 8px; font-size:11px; color:#475569; height:150px; overflow-y:auto; font-family:ui-monospace,monospace; display:flex; flex-direction:column; gap:3px; word-break:break-all }
                 .lda-log-time { color:#94a3b8; margin-right:4px } .lda-log-text { color:#334155 }
-                .lda-q-set { display:flex; align-items:center; gap:6px; cursor:pointer; color:#0d9488; margin:0; height:32px; padding:0 8px; background:#f0fdfa; border:1px solid #ccfbf1; border-radius:8px; box-sizing:border-box; }
-                #lda-quick-actions { position:fixed; right:22px; bottom:85px; display:flex; flex-direction:column; gap:8px; z-index:99998; }
-                .lda-quick-btn { width:42px; height:42px; background:#fff; border-radius:21px; box-shadow:0 4px 12px rgba(13,148,136,.15); border:1px solid #ccfbf1; display:flex; align-items:center; justify-content:center; color:#0d9488; cursor:pointer; transition:all .2s; user-select:none; }
-                .lda-quick-btn:hover { background:#f0fdfa; transform: translateY(-2px); box-shadow:0 6px 16px rgba(13,148,136,.2); }
-                .lda-quick-btn:active { transform: translateY(0); }
-                .lda-quick-btn.act { background:linear-gradient(135deg,#14b8a6,#059669) !important; color:#fff !important; border:none; box-shadow:0 4px 12px rgba(5,150,105,.3); }
-                .post-stream.lookopwrapactive .topic-post { display:none !important; }
-                .post-stream.lookopwrapactive .topic-post.topic-owner { display:block !important; }
+                .lda-q-set { display:flex; align-items:center; gap:6px; cursor:pointer; color:#0d9488; margin:0; height:32px; padding:0 8px; background:#f0fdfa; border:1px solid #ccfbf1; border-radius:8px; box-sizing:border-box }
+                #lda-quick-actions { position:fixed; right:22px; bottom:85px; display:flex; flex-direction:column; gap:8px; z-index:99998 }
+                .lda-quick-btn { width:42px; height:42px; background:#fff; border-radius:21px; box-shadow:0 4px 12px rgba(13,148,136,.15); border:1px solid #ccfbf1; display:flex; align-items:center; justify-content:center; color:#0d9488; cursor:pointer; transition:all .2s; user-select:none }
+                .lda-quick-btn:hover { background:#f0fdfa; transform:translateY(-2px); box-shadow:0 6px 16px rgba(13,148,136,.2) }
+                .lda-quick-btn:active { transform:translateY(0) }
+                .lda-quick-btn.act { background:linear-gradient(135deg,#14b8a6,#059669) !important; color:#fff !important; border:none; box-shadow:0 4px 12px rgba(5,150,105,.3) }
+                .post-stream.lookopwrapactive .topic-post { display:none !important }
+                .post-stream.lookopwrapactive .topic-post.topic-owner { display:block !important }
+                .lda-pop-tip { position:absolute; bottom:115%; right:0; background:rgba(15,23,42,0.92); color:#fff; padding:5px 10px; border-radius:6px; font-size:12px; white-space:nowrap; pointer-events:none; opacity:0; transform:translateY(4px); transition:all .2s ease; z-index:10000; box-shadow:0 4px 12px rgba(0,0,0,.2); backdrop-filter:blur(4px) }
+                .lda-pop-tip.show { opacity:1; transform:translateY(0) }
+                .lda-modal-mask { position:fixed; inset:0; background:rgba(15,23,42,0.45); z-index:100000; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px) }
+                .lda-modal-wrap { background:#fff; border-radius:12px; width:92%; max-width:540px; box-shadow:0 8px 30px rgba(13,148,136,.2); border:1px solid #ccfbf1; display:flex; flex-direction:column; padding:14px; gap:8px; box-sizing:border-box }
+                .lda-modal-head { display:flex; justify-content:space-between; align-items:center; font-size:13px; font-weight:600; color:#0f766e }
+                .lda-modal-close { cursor:pointer; background:transparent; border:none; color:#64748b; display:flex; align-items:center; justify-content:center; padding:2px; border-radius:4px; font-size:18px; line-height:1 }
+                .lda-modal-close:hover { color:#0f766e }
+                .lda-modal-wrap textarea { width:100%; height:260px; box-sizing:border-box; background:#f8fafc; border:1px solid #99f6e4; border-radius:8px; font-family:ui-monospace,monospace; font-size:12px; padding:8px; outline:none; resize:vertical; color:#0f766e }
             `);
         }
         
@@ -414,13 +739,13 @@
             this.box.innerHTML = `
                 <div id="lda-panel-content">
                     <div id="lda-header">
-                        <a id="lda-header-title" href="https://github.com/YisRime/AutoLD" target="_blank">Auto LD v3.2.0 By Yis_Rime</a>
+                        <a id="lda-header-title" href="https://github.com/YisRime/AutoLD" target="_blank">Auto LD v3.3.0 By Yis_Rime</a>
                     </div>
                     <div class="lda-group">
                         <details style="width:100%">
                             <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>自动阅读</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-execute">开始</button></div></summary>
                             <div style="display:flex;flex-direction:column;gap:6px;padding-top:4px">
-                                <div class="lda-row" title="手动进行 CF 验证"><span>CF 验证</span><div class="lda-ctrl"><button id="lda-cf-btn" class="lda-inp" style="cursor:pointer;padding:0">验证</button></div></div>
+                                <div class="lda-row" title="手动进行 CF 验证"><span>CF 验证</span><div class="lda-ctrl"><button id="lda-cf-btn" class="lda-inp" style="cursor:pointer">验证</button></div></div>
                                 <div class="lda-row" title="自动跳过已经阅读过的话题"><span>跳过已读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-skip"></div></div>
                                 <div class="lda-row" title="完整阅读每个话题未读内容"><span>完整阅读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-full"></div></div>
                                 <div class="lda-row" title="保持不被浏览器休眠"><span>后台保活</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-keep"></div></div>
@@ -433,6 +758,19 @@
                         </details>
                     </div>
                     <div class="lda-extra-group">
+                        <details style="width:100%" id="lda-custom-detail">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>功能配置</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-btn-custom-style">样式定义</button></div></summary>
+                            <div style="display:flex;flex-direction:column;gap:6px;padding-top:4px">
+                                <div class="lda-row" title="智能排版添加中英字符间隙"><span>中英混排优化</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-typeset"></div></div>
+                                <div class="lda-row" title="对列表中话题显示创建时间"><span>创建时间显示</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-stamp"></div></div>
+                                <div class="lda-row" title="修改动态头像改为静态显示"><span>动态转静态图</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-freeze"></div></div>
+                                <div class="lda-row" title="自动过滤羊毛区已结束主题"><span>隐藏已领福利</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-purge"></div></div>
+                                <div class="lda-row" title="关闭媒体资源后台自动播放"><span>禁止自动播放</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-mute"></div></div>
+                                <div class="lda-row" title="直接显示帖子中的模糊文字"><span>移除文字模糊</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-clarify"></div></div>
+                                <div class="lda-row" title="查询当前话题统计自身发言"><span>查看个人回复</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-floors"></div></div>
+                                <div class="lda-row" title="点击外部链接跳过确认弹窗"><span>跳过外链确认</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-bypass"></div></div>
+                            </div>
+                        </details>
                         <details style="width:100%" id="lda-user-detail">
                             <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>用户信息</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-fetch-user">刷新</button></div></summary>
                             <div class="lda-grid-content" id="lda-user-list"><div class="lda-empty-tip">正在获取</div></div>
@@ -541,6 +879,63 @@
                 if (boolean) { element.checked = GM_getValue(`lda_${key}`, fallback); element.onchange = event => GM_setValue(`lda_${key}`, event.target.checked); }
                 else { element.value = GM_getValue(`lda_${key}`, fallback); element.onchange = event => GM_setValue(`lda_${key}`, event.target.value); }
             });
+
+            const options = [
+                ['typeset', false],
+                ['stamp', false],
+                ['freeze', false],
+                ['purge', false],
+                ['mute', false],
+                ['clarify', false],
+                ['floors', false],
+                ['bypass', false]
+            ];
+            options.forEach(([key, fallback]) => {
+                const element = document.getElementById(`lda-opt-${key}`);
+                if (!element) return;
+                element.checked = GM_getValue(`lda_opt_${key}`, fallback);
+                element.onchange = (e) => {
+                    GM_setValue(`lda_opt_${key}`, e.target.checked);
+                    Patch.setup();
+                };
+            });
+
+            const btnStyle = document.getElementById('lda-btn-custom-style');
+            if (btnStyle) {
+                btnStyle.onclick = (event) => {
+                    event.stopPropagation();
+                    let modal = document.getElementById('lda-style-modal');
+                    if (!modal) {
+                        modal = document.createElement('div');
+                        modal.id = 'lda-style-modal';
+                        modal.className = 'lda-modal-mask';
+                        modal.innerHTML = `
+                            <div class="lda-modal-wrap" onclick="event.stopPropagation()">
+                                <div class="lda-modal-head">
+                                    <span>自定义 CSS 样式</span>
+                                    <button type="button" class="lda-modal-close">&times;</button>
+                                </div>
+                                <textarea></textarea>
+                            </div>
+                        `;
+                        document.body.appendChild(modal);
+
+                        const textarea = modal.querySelector('textarea');
+                        textarea.value = GM_getValue('lda_opt_style', '');
+                        textarea.oninput = (e) => {
+                            GM_setValue('lda_opt_style', e.target.value);
+                            Patch.inject(e.target.value);
+                        };
+
+                        const closeModal = () => { modal.style.display = 'none'; };
+                        modal.querySelector('.lda-modal-close').onclick = closeModal;
+                        modal.onclick = closeModal;
+                    } else {
+                        modal.querySelector('textarea').value = GM_getValue('lda_opt_style', '');
+                        modal.style.display = 'flex';
+                    }
+                };
+            }
             
             const keep = document.getElementById('lda-keep');
             keep.checked = GM_getValue('lda_keep', true);
@@ -662,7 +1057,14 @@
         update(count) { if (this.button.classList.contains('stop') && !this.button.classList.contains('pause')) this.button.innerText = `已读: ${count}`; }
     }
 
-    const view = new View(); Interceptor.setup(view); const runner = new Runner(new Liker(view), view); Interceptor.runner = runner;
+    const view = new View();
+    Interceptor.setup(view);
+    const runner = new Runner(new Liker(view), view);
+    Interceptor.runner = runner;
+    Patch.setup();
+    window.addEventListener('lda_route_change', () => Patch.setup());
+    window.addEventListener('scroll', () => Patch.purge(), { passive: true });
+
     view.button.onclick = (event) => {
         event.stopPropagation();
         if (runner.active) return runner.stop('停止');
