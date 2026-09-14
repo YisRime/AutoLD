@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      3.0.0
+// @version      3.1.0
 // @author       YisRime
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
@@ -357,14 +357,14 @@
         
         styles() {
             GM_addStyle(`
-                #lda-box { position:fixed; right:16px; top:50%; transform:translateY(-50%); width:56px; height:56px; background:#fff; border-radius:28px; z-index:99999; box-shadow:0 4px 16px rgba(13,148,136,.18); border:1px solid #ccfbf1; overflow:hidden; transition:all .25s; box-sizing:border-box; display:flex; flex-direction:column; padding:11px }
+                #lda-box { position:fixed; right:16px; bottom:20px; width:56px; height:56px; background:#fff; border-radius:28px; z-index:99999; box-shadow:0 4px 16px rgba(13,148,136,.18); border:1px solid #ccfbf1; overflow:hidden; transition:all .25s; box-sizing:border-box; display:flex; flex-direction:column; padding:11px }
                 #lda-box.expanded { width:265px; height:auto; border-radius:16px; padding:12px; max-height:92vh; overflow-y:auto }
                 #lda-box.active-run { border-color:#5eead4; box-shadow:0 0 14px rgba(20,184,166,.4) }
                 #lda-panel-content { display:flex; flex-direction:column; gap:8px; font-family:-apple-system,BlinkMacSystemFont,sans-serif; width:100% }
                 #lda-header { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#64748b; height:16px; padding:0 2px }
                 #lda-header-title { font-weight:600; color:#0f766e }
                 #lda-header a { color:#0d9488; text-decoration:none }
-                #lda-top-bar { display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100%; height:32px }
+                #lda-bottom-bar { display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100%; height:32px }
                 #lda-execute { flex:1; height:32px }
                 #lda-gear { width:32px; height:32px; display:flex; align-items:center; justify-content:center; color:#0d9488; cursor:pointer; background:transparent; border:none; border-radius:8px }
                 #lda-box:not(.expanded) .lda-icon-close { display:none }
@@ -372,7 +372,7 @@
                 #lda-box.expanded .lda-icon-close { display:block }
                 #lda-box.expanded #lda-gear { background:#f0fdfa; border:1px solid #ccfbf1 }
                 #lda-box:not(.expanded) #lda-panel-content { gap:0 }
-                #lda-box:not(.expanded) #lda-top-bar { width:32px; height:32px; margin:0 auto }
+                #lda-box:not(.expanded) #lda-bottom-bar { width:32px; height:32px; margin:0 auto }
                 #lda-box:not(.expanded) #lda-header, #lda-box:not(.expanded) #lda-execute, #lda-box:not(.expanded) .lda-group, #lda-box:not(.expanded) .lda-extra-group { display:none !important }
                 .lda-group { display:flex; flex-direction:column; gap:6px; width:100% }
                 .lda-row { display:flex; justify-content:space-between; align-items:center; font-size:13px; color:#1e293b; height:26px }
@@ -406,12 +406,15 @@
                     <div id="lda-header">
                         <span id="lda-header-title">Auto LD</span><a href="https://github.com/YisRime/AutoLD" target="_blank">GitHub</a>
                     </div>
-                    <div id="lda-top-bar">
-                        <button id="lda-execute" class="lda-button start">开始</button>
-                        <div id="lda-gear" title="展开/收起">
-                            <svg class="lda-icon-gear" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.485.485 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-                            <svg class="lda-icon-close" viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                        </div>
+                    <div class="lda-extra-group">
+                        <details style="width:100%" id="lda-user-detail">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>用户信息</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-fetch-user">刷新</button></div></summary>
+                            <div class="lda-grid-content" id="lda-user-list"><div class="lda-empty-tip">正在获取</div></div>
+                        </details>
+                        <details style="width:100%" id="lda-credit-detail">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>用户 LDC</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-fetch-credit">刷新</button></div></summary>
+                            <div class="lda-grid-content" id="lda-credit-list"><div class="lda-empty-tip">正在获取</div></div>
+                        </details>
                     </div>
                     <div class="lda-group">
                         <div class="lda-row" title="自动跳过已经阅读过的话题"><span>跳过已读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-skip"></div></div>
@@ -427,20 +430,17 @@
                                 <div class="lda-row" title="手动进行 CF 验证"><span>CF 验证</span><div class="lda-ctrl"><button id="lda-cf-btn" class="lda-inp" style="cursor:pointer">验证</button></div></div>
                             </div>
                         </details>
-                        <details style="width:100%" open>
+                        <details style="width:100%">
                             <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>运行日志</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-clear-log">清空</button></div></summary>
                             <div id="lda-log-box"></div>
                         </details>
                     </div>
-                    <div class="lda-extra-group">
-                        <details style="width:100%" id="lda-user-detail">
-                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>用户信息</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-fetch-user">刷新</button></div></summary>
-                            <div class="lda-grid-content" id="lda-user-list"><div class="lda-empty-tip">正在获取</div></div>
-                        </details>
-                        <details style="width:100%" id="lda-credit-detail">
-                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>用户 LDC</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-fetch-credit">刷新</button></div></summary>
-                            <div class="lda-grid-content" id="lda-credit-list"><div class="lda-empty-tip">正在获取</div></div>
-                        </details>
+                    <div id="lda-bottom-bar">
+                        <button id="lda-execute" class="lda-button start">开始</button>
+                        <div id="lda-gear" title="展开/收起">
+                            <svg class="lda-icon-gear" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.485.485 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                            <svg class="lda-icon-close" viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                        </div>
                     </div>
                 </div>`;
             document.body.appendChild(this.box);
