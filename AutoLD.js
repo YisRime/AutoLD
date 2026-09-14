@@ -1,8 +1,9 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      3.1.0
+// @version      3.2.0
 // @author       YisRime
+// @description  Linux Do 辅助工具：一键查询 Connect 与 Credits；自动阅读与点赞帖子，支持后台保活；只看楼主、一键回复与直达一楼。
 // @homepage     https://github.com/YisRime/AutoLD
 // @supportURL   https://github.com/YisRime/AutoLD/issues
 // @match        https://linux.do/*
@@ -365,7 +366,6 @@
                 #lda-header-title { font-weight:600; color:#0f766e }
                 #lda-header a { color:#0d9488; text-decoration:none }
                 #lda-bottom-bar { display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100%; height:32px }
-                #lda-execute { flex:1; height:32px }
                 #lda-gear { width:32px; height:32px; display:flex; align-items:center; justify-content:center; color:#0d9488; cursor:pointer; background:transparent; border:none; border-radius:8px }
                 #lda-box:not(.expanded) .lda-icon-close { display:none }
                 #lda-box.expanded .lda-icon-gear { display:none }
@@ -373,7 +373,7 @@
                 #lda-box.expanded #lda-gear { background:#f0fdfa; border:1px solid #ccfbf1 }
                 #lda-box:not(.expanded) #lda-panel-content { gap:0 }
                 #lda-box:not(.expanded) #lda-bottom-bar { width:32px; height:32px; margin:0 auto }
-                #lda-box:not(.expanded) #lda-header, #lda-box:not(.expanded) #lda-execute, #lda-box:not(.expanded) .lda-group, #lda-box:not(.expanded) .lda-extra-group { display:none !important }
+                #lda-box:not(.expanded) #lda-header, #lda-box:not(.expanded) .lda-group, #lda-box:not(.expanded) .lda-extra-group, #lda-box:not(.expanded) #lda-quick-settings { display:none !important }
                 .lda-group { display:flex; flex-direction:column; gap:6px; width:100% }
                 .lda-row { display:flex; justify-content:space-between; align-items:center; font-size:13px; color:#1e293b; height:26px }
                 .lda-ctrl { display:flex; align-items:center; justify-content:flex-end; width:64px }
@@ -388,13 +388,23 @@
                 details summary { list-style:none; outline:none }
                 details summary.lda-row { display:flex !important; justify-content:space-between !important; align-items:center !important; width:100% !important; height:26px !important }
                 .lda-extra-group { display:flex; flex-direction:column; gap:6px; width:100% }
-                .lda-action-btn { background:#f0fdfa; border:1px solid #99f6e4; color:#0f766e; border-radius:6px; padding:0 8px; font-size:11px; height:22px; cursor:pointer; line-height:20px; outline:none }
+                .lda-action-btn { background:#f0fdfa; border:1px solid #99f6e4; color:#0f766e; border-radius:6px; padding:0 8px; font-size:11px; height:22px; cursor:pointer; line-height:20px; outline:none; white-space:nowrap }
+                .lda-action-btn.stop { background:linear-gradient(135deg,#14b8a6,#10b981); color:#fff; border:none; line-height:22px }
+                .lda-action-btn.pause { background:linear-gradient(135deg,#f59e0b,#d97706); color:#fff; border:none; line-height:22px }
                 .lda-grid-content { display:grid; grid-template-columns:1fr 1fr; gap:4px 8px; background:#f0fdfa; border:1px solid #ccfbf1; border-radius:8px; padding:6px 8px; margin-top:4px }
                 .lda-grid-item { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#334155 }
                 .lda-grid-item .lda-val { font-weight:600; color:#0f766e; margin-left:4px }
                 .lda-empty-tip { grid-column:span 2; text-align:center; color:#94a3b8; font-size:11px; padding:4px 0 }
-                #lda-log-box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:6px 8px; font-size:11px; color:#475569; max-height:180px; overflow-y:auto; font-family:ui-monospace,monospace; display:flex; flex-direction:column; gap:3px; word-break:break-all }
+                #lda-log-box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:6px 8px; font-size:11px; color:#475569; height:150px; overflow-y:auto; font-family:ui-monospace,monospace; display:flex; flex-direction:column; gap:3px; word-break:break-all }
                 .lda-log-time { color:#94a3b8; margin-right:4px } .lda-log-text { color:#334155 }
+                .lda-q-set { display:flex; align-items:center; gap:6px; cursor:pointer; color:#0d9488; margin:0; height:32px; padding:0 8px; background:#f0fdfa; border:1px solid #ccfbf1; border-radius:8px; box-sizing:border-box; }
+                #lda-quick-actions { position:fixed; right:22px; bottom:85px; display:flex; flex-direction:column; gap:8px; z-index:99998; }
+                .lda-quick-btn { width:42px; height:42px; background:#fff; border-radius:21px; box-shadow:0 4px 12px rgba(13,148,136,.15); border:1px solid #ccfbf1; display:flex; align-items:center; justify-content:center; color:#0d9488; cursor:pointer; transition:all .2s; user-select:none; }
+                .lda-quick-btn:hover { background:#f0fdfa; transform: translateY(-2px); box-shadow:0 6px 16px rgba(13,148,136,.2); }
+                .lda-quick-btn:active { transform: translateY(0); }
+                .lda-quick-btn.act { background:linear-gradient(135deg,#14b8a6,#059669) !important; color:#fff !important; border:none; box-shadow:0 4px 12px rgba(5,150,105,.3); }
+                .post-stream.lookopwrapactive .topic-post { display:none !important; }
+                .post-stream.lookopwrapactive .topic-post.topic-owner { display:block !important; }
             `);
         }
         
@@ -404,7 +414,23 @@
             this.box.innerHTML = `
                 <div id="lda-panel-content">
                     <div id="lda-header">
-                        <span id="lda-header-title">Auto LD</span><a href="https://github.com/YisRime/AutoLD" target="_blank">GitHub</a>
+                        <a id="lda-header-title" href="https://github.com/YisRime/AutoLD" target="_blank">Auto LD v3.2.0 By Yis_Rime</a>
+                    </div>
+                    <div class="lda-group">
+                        <details style="width:100%">
+                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>自动阅读</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-execute">开始</button></div></summary>
+                            <div style="display:flex;flex-direction:column;gap:6px;padding-top:4px">
+                                <div class="lda-row" title="手动进行 CF 验证"><span>CF 验证</span><div class="lda-ctrl"><button id="lda-cf-btn" class="lda-inp" style="cursor:pointer;padding:0">验证</button></div></div>
+                                <div class="lda-row" title="自动跳过已经阅读过的话题"><span>跳过已读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-skip"></div></div>
+                                <div class="lda-row" title="完整阅读每个话题未读内容"><span>完整阅读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-full"></div></div>
+                                <div class="lda-row" title="保持不被浏览器休眠"><span>后台保活</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-keep"></div></div>
+                                <div class="lda-row" title="设置本次阅读话题数量上限"><span>阅读限额</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-limit" min="0"></div></div>
+                                <div class="lda-row" title="设置本次阅读话题时长上限"><span>阅读限时</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-duration" min="0"></div></div>
+                                <div class="lda-row" title="阅读总数少于设定值的话题"><span>最大楼层</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-maximum" min="0"></div></div>
+                                <div class="lda-row" title="自动点赞的赞数阈值 | 点击文字可重置冷却"><span id="lda-threshold-label">点赞阈值</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-threshold" min="-1"></div></div>
+                                <div id="lda-log-box" style="margin-top:4px;"></div>
+                            </div>
+                        </details>
                     </div>
                     <div class="lda-extra-group">
                         <details style="width:100%" id="lda-user-detail">
@@ -416,27 +442,21 @@
                             <div class="lda-grid-content" id="lda-credit-list"><div class="lda-empty-tip">正在获取</div></div>
                         </details>
                     </div>
-                    <div class="lda-group">
-                        <div class="lda-row" title="自动跳过已经阅读过的话题"><span>跳过已读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-skip"></div></div>
-                        <div class="lda-row" title="完整阅读每个话题未读内容"><span>完整阅读</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-full"></div></div>
-                        <div class="lda-row" title="设置本次阅读话题数量上限"><span>阅读限额</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-limit" min="0"></div></div>
-                        <div class="lda-row" title="设置本次阅读话题时长上限"><span>阅读限时</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-duration" min="0"></div></div>
-                        <div class="lda-row" title="阅读总数少于设定值的话题"><span>最大楼层</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-maximum" min="0"></div></div>
-                        <div class="lda-row" title="自动点赞的赞数阈值 | 点击文字可重置冷却"><span id="lda-threshold-label">点赞阈值</span><div class="lda-ctrl"><input type="number" class="lda-inp" id="lda-threshold" min="-1"></div></div>
-                        <details style="width:100%">
-                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>高级选项</span></summary>
-                            <div style="display:flex;flex-direction:column;gap:6px;padding-top:4px">
-                                <div class="lda-row" title="保持不被浏览器休眠"><span>后台保活</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-keep"></div></div>
-                                <div class="lda-row" title="手动进行 CF 验证"><span>CF 验证</span><div class="lda-ctrl"><button id="lda-cf-btn" class="lda-inp" style="cursor:pointer">验证</button></div></div>
-                            </div>
-                        </details>
-                        <details style="width:100%">
-                            <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>运行日志</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-clear-log">清空</button></div></summary>
-                            <div id="lda-log-box"></div>
-                        </details>
-                    </div>
                     <div id="lda-bottom-bar">
-                        <button id="lda-execute" class="lda-button start">开始</button>
+                        <div id="lda-quick-settings" style="display:flex;gap:8px;align-items:center;flex:1;">
+                            <label title="只看楼主" class="lda-q-set">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                                <input type="checkbox" id="lda-show-lookop" class="lda-checkbox">
+                            </label>
+                            <label title="回复话题" class="lda-q-set">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 9L5 14L10 19"></path><path d="M5 14H14C17.3137 14 20 11.3137 20 8V5"></path></svg>
+                                <input type="checkbox" id="lda-show-reply" class="lda-checkbox">
+                            </label>
+                            <label title="直达一楼" class="lda-q-set">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                                <input type="checkbox" id="lda-show-floor" class="lda-checkbox">
+                            </label>
+                        </div>
                         <div id="lda-gear" title="展开/收起">
                             <svg class="lda-icon-gear" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.485.485 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
                             <svg class="lda-icon-close" viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -445,11 +465,76 @@
                 </div>`;
             document.body.appendChild(this.box);
             Logger.setup(document.getElementById('lda-log-box'));
+
+            this.quickActions = document.createElement('div');
+            this.quickActions.id = 'lda-quick-actions';
+            this.quickActions.innerHTML = `
+                <div id="lda-btn-lookop" class="lda-quick-btn" title="只看楼主">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                </div>
+                <div id="lda-btn-reply" class="lda-quick-btn" title="回复话题">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 9L5 14L10 19"></path><path d="M5 14H14C17.3137 14 20 11.3137 20 8V5"></path></svg>
+                </div>
+                <div id="lda-btn-floor" class="lda-quick-btn" title="直达一楼">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                </div>
+            `;
+            document.body.appendChild(this.quickActions);
         }
         
         events() {
             this.box.onclick = () => { if (!this.box.classList.contains('expanded')) this.box.classList.add('expanded'); };
             document.getElementById('lda-gear').onclick = (event) => { event.stopPropagation(); this.box.classList.toggle('expanded'); };
+            
+            const bindQuickToggle = (key, btnId, defaultVal) => {
+                const checkbox = document.getElementById(`lda-show-${key}`);
+                const btn = document.getElementById(btnId);
+                const isShow = GM_getValue(`lda_show_${key}`, defaultVal);
+                checkbox.checked = isShow;
+                btn.style.display = isShow ? 'flex' : 'none';
+                
+                checkbox.onchange = (event) => {
+                    const checked = event.target.checked;
+                    GM_setValue(`lda_show_${key}`, checked);
+                    btn.style.display = checked ? 'flex' : 'none';
+                };
+            };
+            bindQuickToggle('lookop', 'lda-btn-lookop', true);
+            bindQuickToggle('reply', 'lda-btn-reply', true);
+            bindQuickToggle('floor', 'lda-btn-floor', true);
+
+            document.getElementById('lda-btn-lookop').onclick = (event) => {
+                event.stopPropagation();
+                const btn = document.getElementById('lda-btn-lookop');
+                btn.classList.toggle('act');
+                const stream = document.querySelector('.post-stream');
+                if (stream) stream.classList.toggle('lookopwrapactive');
+            };
+
+            document.getElementById('lda-btn-reply').onclick = (event) => {
+                event.stopPropagation();
+                document.getElementById('topic-footer-buttons')?.querySelector('.topic-footer-main-buttons button')?.click();
+            };
+
+            document.getElementById('lda-btn-floor').onclick = (event) => {
+                event.stopPropagation();
+                const match = location.href.match(/^(https?:\/\/[^\/]+\/t\/[^\/]+\/\d+)/);
+                if (match) {
+                    const url = match[1];
+                    if (location.href !== url) {
+                        const context = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+                        const router = context.Discourse?.__container__?.lookup('service:router');
+                        if (router) router.transitionTo(new URL(url).pathname);
+                        else location.href = url;
+                    } else {
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                } else if (document.querySelector('h1.header-title a')) {
+                    location.href = document.querySelector('h1.header-title a').href;
+                } else {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+            };
             
             [['limit', 0, false], ['duration', 0, false], ['maximum', 128, false], ['threshold', 5, false], ['skip', true, true], ['full', false, true]].forEach(([key, fallback, boolean]) => {
                 const element = document.getElementById(`lda-${key}`);
@@ -461,7 +546,6 @@
             keep.checked = GM_getValue('lda_keep', true);
             keep.onchange = event => { GM_setValue('lda_keep', event.target.checked); if (event.target.checked && this.button.classList.contains('stop')) Stealth.keep(); else Stealth.suspend(); };
             
-            document.getElementById('lda-clear-log').onclick = (event) => { event.stopPropagation(); Logger.clear(); };
             document.getElementById('lda-cf-btn').onclick = (event) => {
                 event.stopPropagation(); const running = runner.active;
                 if (running) { runner.stop('等待 CF 验证'); this.status('暂停'); }
@@ -566,7 +650,7 @@
         status(state) {
             const active = state === '运行', paused = state.includes('暂停');
             this.box.classList.toggle('active-run', active);
-            this.button.className = `lda-button ${active ? 'stop' : (paused ? 'pause' : 'start')}`;
+            this.button.className = `lda-action-btn ${active ? 'stop' : (paused ? 'pause' : 'start')}`;
             this.button.innerText = paused ? '暂停' : (active ? `已读: ${sessionStorage.getItem('lda_count') || 0}` : '开始');
         }
         
@@ -579,7 +663,8 @@
     }
 
     const view = new View(); Interceptor.setup(view); const runner = new Runner(new Liker(view), view); Interceptor.runner = runner;
-    view.button.onclick = () => {
+    view.button.onclick = (event) => {
+        event.stopPropagation();
         if (runner.active) return runner.stop('停止');
         if (parseInt(sessionStorage.getItem('lda_pause_until') || '0', 10) > Date.now()) return runner.stop('停止 - 限流');
         runner.start();
