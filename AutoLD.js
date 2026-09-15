@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Auto Linux Do
 // @namespace    https://github.com/YisRime/AutoLD
-// @version      3.3.0
+// @version      3.4.0
 // @author       YisRime
 // @description  Linux Do 小助手：支持自动阅读与点赞，直跳外链、只看楼主、去模糊/盘古化，并支持一键查询升级指标与积分资产。
 // @homepage     https://github.com/YisRime/AutoLD
@@ -149,6 +149,23 @@
     const Patch = {
         watcher: null,
         _bypassBound: false,
+
+        splash(state) {
+            const key = 'linuxdo-kill-splash-style';
+            let tag = document.getElementById(key);
+            if (state) {
+                if (!tag) {
+                    tag = document.createElement('style');
+                    tag.id = key;
+                    tag.textContent = `#d-splash { display: none !important; opacity: 0 !important; pointer-events: none !important; }`;
+                    document.head.appendChild(tag);
+                }
+                const splashElement = document.getElementById('d-splash');
+                if (splashElement) splashElement.remove();
+            } else if (tag) {
+                tag.remove();
+            }
+        },
 
         space(text) {
             if (!text || typeof text !== 'string') return text;
@@ -400,11 +417,13 @@
                 clarify: GM_getValue('lda_opt_clarify', false),
                 floors: GM_getValue('lda_opt_floors', false),
                 bypass: GM_getValue('lda_opt_bypass', false),
+                splash: GM_getValue('lda_opt_splash', false),
                 style: GM_getValue('lda_opt_style', '')
             };
 
             this.inject(cfg.style);
             this.clarify(cfg.clarify);
+            this.splash(cfg.splash);
 
             if (!this._bypassBound) {
                 window.addEventListener('click', (e) => this.bypass(e), true);
@@ -432,9 +451,14 @@
                     purge: GM_getValue('lda_opt_purge', false),
                     mute: GM_getValue('lda_opt_mute', false),
                     floors: GM_getValue('lda_opt_floors', false),
-                    bypass: GM_getValue('lda_opt_bypass', false)
+                    bypass: GM_getValue('lda_opt_bypass', false),
+                    splash: GM_getValue('lda_opt_splash', false)
                 };
 
+                if (active.splash) {
+                    const splashElement = document.getElementById('d-splash');
+                    if (splashElement) splashElement.remove();
+                }
                 if (active.purge) this.purge();
 
                 for (const m of mutations) {
@@ -739,7 +763,7 @@
             this.box.innerHTML = `
                 <div id="lda-panel-content">
                     <div id="lda-header">
-                        <a id="lda-header-title" href="https://github.com/YisRime/AutoLD" target="_blank">Auto LD v3.3.0 By Yis_Rime</a>
+                        <a id="lda-header-title" href="https://github.com/YisRime/AutoLD" target="_blank">Auto LD v3.4.0 By Yis_Rime</a>
                     </div>
                     <div class="lda-group">
                         <details style="width:100%">
@@ -761,6 +785,7 @@
                         <details style="width:100%" id="lda-custom-detail">
                             <summary class="lda-row" style="cursor:pointer" title="展开/收起"><span>功能配置</span><div class="lda-ctrl"><button class="lda-action-btn" id="lda-btn-custom-style">样式定义</button></div></summary>
                             <div style="display:flex;flex-direction:column;gap:6px;padding-top:4px">
+                                <div class="lda-row" title="彻底移除页面加载过渡动画"><span>移除加载动画</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-splash"></div></div>
                                 <div class="lda-row" title="智能排版添加中英字符间隙"><span>中英混排优化</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-typeset"></div></div>
                                 <div class="lda-row" title="对列表中话题显示创建时间"><span>创建时间显示</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-stamp"></div></div>
                                 <div class="lda-row" title="修改动态头像改为静态显示"><span>动态转静态图</span><div class="lda-ctrl"><input type="checkbox" class="lda-checkbox" id="lda-opt-freeze"></div></div>
@@ -881,6 +906,7 @@
             });
 
             const options = [
+                ['splash', false],
                 ['typeset', false],
                 ['stamp', false],
                 ['freeze', false],
